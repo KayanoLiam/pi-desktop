@@ -1,6 +1,74 @@
 # Desktop App Example
 
-Tauri desktop shell + Bun sidecar backend + Next.js UI for running and inspecting Cline chat sessions.
+Tauri desktop shell + Bun sidecar backend + a Next.js webview, being migrated from Cline to Pi.
+
+## Run the desktop App
+
+```sh
+cd apps/examples/desktop-app
+bun run dev
+```
+
+This opens a **native Tauri window**. Next.js runs internally to serve its
+webview during development; it is not a requirement to use a browser. Stop any
+previous `dev:headless` / `dev:web` process first so port 3125 is free. The first
+launch builds Rust, the sidecar, and SSH helpers and may download build tools.
+
+`bun run dev:headless` is only a browser/sidecar debugging mode; it does **not**
+open the desktop App. An installed `/Applications/Cline.app` is also separate
+from this source checkout and will not pick up these changes.
+
+## No Cline account required
+
+The desktop opens directly to the workspace and model picker. Cline onboarding,
+account profile/billing screens, login requests, and Cline billing providers
+have been removed from this desktop. Legacy account IPC and Cline OAuth login
+requests are rejected before credentials are read or a browser is opened.
+Cline Cloud is disabled, including old opt-ins and environment overrides, because
+it depends on that account system. Existing credential files and history are
+not deleted. Third-party provider authentication is separate from Cline login;
+Pi authentication and execution are still a later migration step.
+
+## Pi model selection preview
+
+New **local** threads now offer Pi's provider → model → thinking picker. Select
+a provider, then one of its models, then a thinking level. Models are identified
+by **provider ID + model ID**; choices are remembered separately per provider in
+browser storage, independently of Cline's model settings. Thinking levels are
+the ones the model accepts (Pi's `reasoning` / `thinkingLevelMap` rules); the
+default comes from Pi's `modelThinkingLevels` or `defaultThinkingLevel` in
+`settings.json`, else `medium`, clamped like the Pi CLI does at startup. The
+level is remembered per provider/model pair.
+
+The catalog reads the user's Pi agent directory (`~/.pi/agent`, or
+`$PI_CODING_AGENT_DIR`): `auth.json`, `models.json`, cached `models-store.json`,
+and `settings.json`. It lists configured/available providers rather than the
+whole built-in catalog, and applies `enabledModels` using Pi's provider-qualified
+and wildcard scope rules. Saved Pi startup defaults are used only when the
+desktop has no remembered selection. Use **Refresh Pi models** after changing Pi.
+
+This is read-only and offline: no credential refresh, config/cache writes,
+API-key commands, or inference. Secrets never cross the webview bridge.
+Providers registered by installed Pi extensions (for example Antigravity) are
+not part of the bundled SDK, so when `enabledModels` references one, the sidecar
+asks the installed `pi` CLI (`pi --mode rpc`, offline, no session, no tools) for
+its available models and takes the extension's real model names and
+thinking-level maps from there. Set `PI_DESKTOP_PI_BIN` to point at a specific
+Pi binary. If Pi cannot be launched, exact authenticated references are still
+listed with **unknown** thinking levels rather than guessed ones. Listed
+credentials are not a guarantee that a request would succeed.
+
+The sidebar, welcome screen, window title, and app/Dock icons use the supplied
+Pi logo and Pi Agent branding (the Settings → App icon variants are the Pi mark
+on light, paper, dark, and coral backgrounds).
+Both light and dark themes remain available, including existing saved dark
+preferences and OS theme detection. The light layout follows the reference;
+there is no forced theme reset.
+
+This is the first migration step, **selection only**. Sending is disabled for new
+local threads until Pi chat execution is connected. Existing local Cline sessions
+and SSH environments keep their previous execution paths; Cline account and
+cloud login flows are no longer available.
 
 ## Dev Commands
 

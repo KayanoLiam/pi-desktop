@@ -20,7 +20,6 @@ import {
 } from "node:path";
 import { isDeepStrictEqual, promisify } from "node:util";
 import type {
-	ClineAccountActionRequest,
 	CoreSettingsSnapshot,
 	ProviderCapability,
 	ProviderClient,
@@ -32,13 +31,10 @@ import type {
 } from "@cline/core";
 import {
 	addLocalProvider,
-	ClineAccountService,
-	type ClineAccountUser,
 	clearAccountTelemetryIdentity,
 	createConfiguredStreamingTranscriptionSession,
 	createUserInstructionConfigService,
 	ensureCustomProvidersLoaded,
-	executeClineAccountAction,
 	fetchClineRecommendedModels,
 	getCoreBuiltinToolCatalog,
 	getLocalProviderModels,
@@ -49,11 +45,9 @@ import {
 	normalizeOAuthProvider,
 	ProviderSettingsManager,
 	parseMcpServerRegistration,
-	persistClineAccountTelemetryIdentity,
 	probeMcpServerConnection,
 	RemoteEnvironmentService,
 	readGlobalSettings,
-	resolveClineAccountTelemetryIdentity,
 	resolveMcpServerRegistration,
 	resolveSessionBackend,
 	resolveAgentConfigSearchPaths as resolveSharedAgentConfigSearchPaths,
@@ -488,32 +482,6 @@ function removePathIfExists(
 		recursive: options?.recursive === true,
 	});
 	return true;
-}
-
-function syncAccountContextFromResult(
-	ctx: SidecarContext,
-	manager: ProviderSettingsManager,
-	operation: string,
-	result: unknown,
-): void {
-	if (operation === "fetchMe") {
-		const user = result as ClineAccountUser | undefined;
-		if (user?.id) {
-			const identity = resolveClineAccountTelemetryIdentity(user);
-			ctx.telemetryUser = resolveDesktopTelemetryUser({
-				accountId: identity.id,
-				email: identity.email,
-				organizationId: identity.organizationId,
-			});
-			identifyAccount(ctx.telemetry, identity);
-			persistClineAccountTelemetryIdentity(manager, identity);
-			void identifyDesktopFeatureFlagsAccount(
-				{ id: user.id, email: user.email },
-				{ logger: ctx.logger, telemetry: ctx.telemetry },
-			);
-		}
-		return;
-	}
 }
 
 function syncAccountContextFromSettings(
@@ -2715,42 +2683,10 @@ export async function handleCommand(
 		return { opened: true };
 	}
 
-	// ── Cline account ──────────────────────────────────────────────────
+	// Reject old clients too: removing UI alone must not leave a working
+	// Cline account-login API in the Pi desktop sidecar.
 	if (command === "cline_account") {
-		const operation = String(args?.operation ?? "").trim();
-		if (!operation) throw new Error("operation is required");
-		const manager = new ProviderSettingsManager();
-		// Signed out is an expected state, not a command failure: resolve the
-		// token up front and return a typed result the webview can act on
-		// instead of letting the account service throw a generic error that
-		// would be captured as error telemetry and shown raw to the user.
-		const authToken = await resolveFreshClineAuthToken(manager, ctx);
-		if (!authToken) {
-			// Backstop for credentials that go away without a settings write —
-			// an expired or server-revoked token. Explicit sign-out is handled
-			// at its source in `save_provider_settings`; this catches the rest
-			// so a stale account never keeps serving its rollout cohort.
-			syncSignedOutAccountContext(ctx);
-			return CLINE_ACCOUNT_NOT_AUTHENTICATED_RESULT;
-		}
-		const settings = manager.getProviderSettings("cline");
-		const accountService = new ClineAccountService({
-			apiBaseUrl:
-				settings?.baseUrl?.trim() || getClineEnvironmentConfig().apiBaseUrl,
-			getAuthToken: async () => authToken,
-		});
-		const result = await executeClineAccountAction(
-			args as ClineAccountActionRequest,
-			accountService,
-		);
-		if (operation === "switchAccount") {
-			await resetCloudSessionManager(ctx);
-			// The sidebar must re-scope immediately (personal ⇄ org), not on
-			// the next 12s poll.
-			broadcastEvent(ctx, "cloud_sessions_changed", {});
-		}
-		syncAccountContextFromResult(ctx, manager, operation, result);
-		return result;
+		throw new Error("Cline accounts are not supported in this Pi desktop.");
 	}
 
 	// ── Cline integrations (GitHub App) ────────────────────────────────
@@ -2827,10 +2763,22 @@ export async function handleCommand(
 	}
 
 	// ── Provider management ────────────────────────────────────────────
+	if (command === "list_pi_model_catalog") {
+		const { listPiModelCatalog } = await import("./pi-model-catalog");
+		return await listPiModelCatalog();
+	}
 	if (command === "list_provider_catalog") {
 		const manager = new ProviderSettingsManager();
 		await ensureCustomProvidersLoaded(manager);
-		return await listLocalProviders(manager, { isClinePassEnabled: true });
+		const catalog = await listLocalProviders(manager, {
+			isClinePassEnabled: false,
+		});
+		return {
+			...catalog,
+			providers: catalog.providers.filter(
+				(provider) => provider.id !== "cline" && provider.id !== "cline-pass",
+			),
+		};
 	}
 	if (command === "list_provider_models") {
 		const manager = new ProviderSettingsManager();
@@ -3028,10 +2976,9 @@ export async function handleCommand(
 				broadcastEvent(ctx, "cloud_sessions_changed", {});
 			}
 		}
-		// Sign-out is a `save_provider_settings` that blanks the cline auth block
-		// (see signOut in webview settings/account-view.tsx), so this is the
-		// authoritative signal — it fires the moment credentials are cleared
-		// rather than waiting for the next account fetch.
+		// Clearing the legacy cline auth block via `save_provider_settings` is
+		// the authoritative sign-out signal for telemetry identity; the Pi
+		// desktop has no account UI, but stored credentials can still be blanked.
 		if (saved.providerId === "cline" || saved.providerId === "cline-pass") {
 			syncAccountContextFromSettings(ctx, manager);
 		}
@@ -3088,6 +3035,11 @@ export async function handleCommand(
 	}
 	if (command === "run_provider_oauth_login") {
 		const providerId = normalizeOAuthProvider(String(args?.provider ?? ""));
+		const storageProviderId =
+			getProviderAuthHandler(providerId)?.storageProviderId ?? providerId;
+		if (storageProviderId === "cline") {
+			throw new Error("Cline accounts are not supported in this Pi desktop.");
+		}
 		const manager = new ProviderSettingsManager();
 		const result = await runCancellableProviderOAuthLogin(
 			manager,
@@ -3112,13 +3064,6 @@ export async function handleCommand(
 					}),
 			},
 		);
-		const storageProviderId =
-			getProviderAuthHandler(providerId)?.storageProviderId ?? providerId;
-		if (storageProviderId === "cline") {
-			// Re-scope cached cloud sessions after sign-in.
-			await resetCloudSessionManager(ctx);
-			broadcastEvent(ctx, "cloud_sessions_changed", {});
-		}
 		return result;
 	}
 	if (command === "cancel_provider_oauth_login") {

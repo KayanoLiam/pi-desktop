@@ -115,7 +115,7 @@ function showUpdateReadyToast(version: string) {
 	toast({
 		title: `Update ready: v${version}`,
 		description:
-			"The new version has been downloaded. Restart now, or later from the update button next to the Cline logo.",
+			"The new version has been downloaded. Restart now, or later from the update button next to the Pi logo.",
 		duration: Number.POSITIVE_INFINITY,
 		action: (
 			<ToastAction
@@ -167,7 +167,7 @@ export async function checkForUpdateAndNotify(): Promise<void> {
 		default:
 			toast({
 				title: "You're up to date",
-				description: "You're already running the latest version of Cline.",
+				description: "You're already running the latest version of Pi Agent.",
 			});
 	}
 }

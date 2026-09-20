@@ -7,25 +7,9 @@ import { HUB_THEME_BOOTSTRAP_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
-	title: "Cline",
-	description: "Build software with Cline.",
-	icons: {
-		icon: [
-			{
-				url: "/32x32.png",
-				media: "(prefers-color-scheme: light)",
-			},
-			{
-				url: "/32x32.png",
-				media: "(prefers-color-scheme: dark)",
-			},
-			{
-				url: "/icon.svg",
-				type: "image/svg+xml",
-			},
-		],
-		apple: "/icon.png",
-	},
+	title: "Pi Agent",
+	description: "Build, debug, and explore your code with Pi.",
+	icons: { icon: "/pi-logo-source.png", apple: "/pi-logo-source.png" },
 };
 
 export default function RootLayout({
@@ -35,8 +19,8 @@ export default function RootLayout({
 }>) {
 	return (
 		<html
-			className="dark h-full"
-			data-cline-hub-theme="dark"
+			className="pi-desktop h-full"
+			data-cline-hub-theme="light"
 			lang="en"
 			suppressHydrationWarning
 		>

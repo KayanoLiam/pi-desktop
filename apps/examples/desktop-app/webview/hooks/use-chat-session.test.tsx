@@ -5643,7 +5643,7 @@ describe("useChatSession", () => {
 		const errorMessages = current.messages.filter((m) => m.role === "error");
 		expect(errorMessages).toHaveLength(1);
 		expect(errorMessages[0]?.content).toContain("no longer valid");
-		expect(errorMessages[0]?.content).toContain("Settings → Account");
+		expect(errorMessages[0]?.content).toContain("Settings → API Providers");
 		expect(errorMessages[0]?.meta).toEqual({
 			reason: "credentials",
 			providerId: "cline",

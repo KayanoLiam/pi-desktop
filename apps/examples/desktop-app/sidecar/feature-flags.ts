@@ -20,11 +20,7 @@ import {
 	buildClinePostHogClient,
 	PostHogFeatureFlagsProvider,
 } from "@cline/core/services/feature-flags/posthog";
-import { FeatureFlag as SharedFeatureFlag } from "@cline/shared";
 import { resolveClineDataDir } from "@cline/shared/storage";
-import { readDesktopSettings } from "./desktop-settings";
-
-const FEATURE_FLAG_CODE_CLOUD_AGENTS = SharedFeatureFlag.CODE_CLOUD_AGENTS;
 
 const DESKTOP_FEATURE_FLAGS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DESKTOP_ACCOUNT_CONTEXT_FILE_VERSION = 1;
@@ -282,25 +278,19 @@ export function readCloudAgentsEnvOverride(): boolean | undefined {
 	return undefined;
 }
 
-/** Whether the rollout makes cloud sessions available to this install. */
-export function isCloudAgentsAvailable(options?: {
+// Cline Cloud requires the removed Cline account system. Keep these helpers
+// for legacy session readers, but neither rollout flags nor old preferences
+// may re-enable account/login entry points in the Pi desktop.
+export function isCloudAgentsAvailable(_options?: {
 	logger?: BasicLogger;
 	telemetry?: ITelemetryService;
 }): boolean {
-	const override = readCloudAgentsEnvOverride();
-	if (override !== undefined) return override;
-	return getDesktopFeatureFlagsService(options).getBooleanFlagEnabled(
-		FEATURE_FLAG_CODE_CLOUD_AGENTS,
-	);
+	return false;
 }
 
-/** Whether cloud sessions are both available and enabled by the user. */
-export function isCloudAgentsEnabled(options?: {
+export function isCloudAgentsEnabled(_options?: {
 	logger?: BasicLogger;
 	telemetry?: ITelemetryService;
 }): boolean {
-	const override = readCloudAgentsEnvOverride();
-	if (override !== undefined) return override;
-	if (!isCloudAgentsAvailable(options)) return false;
-	return readDesktopSettings().cloudSessionsEnabled;
+	return false;
 }

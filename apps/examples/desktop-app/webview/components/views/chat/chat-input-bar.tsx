@@ -66,9 +66,9 @@ import {
 } from "@/lib/provider-model-catalog";
 import type { ProviderModel } from "@/lib/provider-schema";
 import { cn } from "@/lib/utils";
-
 import { startVercelStreamingTranscription } from "@/lib/vercel-streaming-transcription";
 import { MAX_RECORDED_AUDIO_BYTES } from "@/lib/voice-input-limits";
+import { PiModelSelector } from "./pi-model-selector";
 import { PullRequestBar } from "./pull-request-bar";
 import { WorkspaceSelector as WorkspaceSelectorImpl } from "./workspace-selector";
 
@@ -305,6 +305,8 @@ type ChatInputBarProps = {
 	environmentId: string;
 	variant?: "conversation" | "welcome";
 	readOnly?: boolean;
+	/** Pi selection preview; never submit these drafts to the Cline runtime. */
+	piSelectionOnly?: boolean;
 	status: ChatSessionStatus;
 	hasRunningAgents?: boolean;
 	provider: string;
@@ -355,6 +357,7 @@ function ChatInputBarImpl({
 	environmentId,
 	variant = "conversation",
 	readOnly = false,
+	piSelectionOnly = false,
 	status,
 	hasRunningAgents = false,
 	provider,
@@ -553,7 +556,11 @@ function ChatInputBarImpl({
 		? attachments.filter((attachment) => attachment.isImage).length
 		: 0;
 	const canSend =
-		hasDraft && !speechInputActive && !needsCloudRepository && !readOnly;
+		hasDraft &&
+		!speechInputActive &&
+		!needsCloudRepository &&
+		!readOnly &&
+		!piSelectionOnly;
 	const steeringPromptRef = useRef(false);
 	const steerFirstQueuedPrompt = async () => {
 		const firstPrompt = promptsInQueue[0];
@@ -576,7 +583,7 @@ function ChatInputBarImpl({
 		}
 	};
 	const handleSend = useCallback(() => {
-		if (speechInputActive || readOnly) return;
+		if (speechInputActive || readOnly || piSelectionOnly) return;
 		if (unsupportedDraftImageCount > 0) {
 			reportUnsupportedImages();
 			return;
@@ -587,7 +594,7 @@ function ChatInputBarImpl({
 			toast({
 				title: "Add a message to go with your attachments",
 				description:
-					"Describe what you want Cline to do with the attached files before sending.",
+					"Describe what you want Pi to do with the attached files before sending.",
 			});
 			return;
 		}
@@ -596,6 +603,7 @@ function ChatInputBarImpl({
 	}, [
 		needsCloudRepository,
 		readOnly,
+		piSelectionOnly,
 		onSend,
 		promptInput,
 		setPromptInput,
@@ -926,7 +934,7 @@ function ChatInputBarImpl({
 			variant: "destructive",
 			title: "Speech input failed",
 			description: isMicrophoneError
-				? "Check the microphone permission for Cline and try again."
+				? "Check the microphone permission for Pi Agent and try again."
 				: message,
 		});
 	}, []);
@@ -1476,9 +1484,9 @@ function ChatInputBarImpl({
 												? "Agent is working... submit to queue another message, or Enter to send the first message from the queue"
 												: "Agent is working... submit to queue another message"
 											: executionTarget === "cloud"
-												? "Describe what Cline should do in this repository."
+												? "Describe what Pi should do in this repository."
 												: variant === "welcome"
-													? "Ask to make changes, @mention files, reference #PRs, or run /commands."
+													? "Ask Pi to build, debug, or explore your code..."
 													: "Enter your question or type / for commands or @ for context"
 							}
 							readOnly={speechInputActive || readOnly}
@@ -1599,6 +1607,12 @@ function ChatInputBarImpl({
 				)}
 			</div>
 
+			{piSelectionOnly ? (
+				<p className="px-3 pb-2 text-xs text-muted-foreground">
+					Pi selection preview — chat execution is not connected yet.
+				</p>
+			) : null}
+
 			{/* Composer settings */}
 			<div className="flex min-w-0 items-center justify-between gap-x-3 gap-y-2 rounded-b-xl border-t border-border bg-muted/20 px-2 py-2 text-sm text-muted-foreground">
 				<div className="flex min-w-0 flex-auto flex-wrap items-center gap-2 max-[560px]:flex-nowrap">
@@ -1664,57 +1678,63 @@ function ChatInputBarImpl({
 						</button>
 					</div>
 					<div className="min-w-0 shrink-0">
-						<ModelSelector
-							allowedProviderIds={
-								executionTarget === "cloud"
-									? CLINE_ONLY_PROVIDER_IDS
-									: undefined
-							}
-							autoCorrectModel={!cloudSettingsLocked}
-							includeCloudModels={executionTarget === "cloud"}
-							isBusy={isBusy}
-							model={model}
-							onModelChange={onModelChange}
-							onModelSupportsImagesChange={handleModelSupportsImagesChange}
-							onModelSupportsReasoningChange={
-								handleModelSupportsReasoningChange
-							}
-							onOpenModelSettings={onOpenModelSettings}
-							onProviderChange={onProviderChange}
-							persistSelection={executionTarget !== "cloud"}
-							provider={provider}
-						/>
-					</div>
-					<Select
-						disabled={cloudSettingsLocked || modelSupportsReasoning !== true}
-						onValueChange={handleEffortChange}
-						value={EFFORT_LEVELS[effortIndex]?.value ?? "low"}
-					>
-						<SelectTrigger
-							aria-label="Thinking level"
-							className="gap-1.5 border-0 px-2 text-sm shadow-none data-[size=sm]:h-7 [&>svg:last-child]:hidden max-[560px]:size-7 max-[560px]:justify-center max-[560px]:p-0 bg-transparent! hover:bg-surface-hover!"
-							size="sm"
-							title={
-								cloudSettingsLocked
-									? "Thinking level is fixed when a cloud session starts"
-									: modelSupportsReasoning === false
-										? "The selected model does not report reasoning support"
+						{piSelectionOnly ? (
+							<PiModelSelector />
+						) : (
+							<ModelSelector
+								allowedProviderIds={
+									executionTarget === "cloud"
+										? CLINE_ONLY_PROVIDER_IDS
 										: undefined
-							}
+								}
+								autoCorrectModel={!cloudSettingsLocked}
+								includeCloudModels={executionTarget === "cloud"}
+								isBusy={isBusy}
+								model={model}
+								onModelChange={onModelChange}
+								onModelSupportsImagesChange={handleModelSupportsImagesChange}
+								onModelSupportsReasoningChange={
+									handleModelSupportsReasoningChange
+								}
+								onOpenModelSettings={onOpenModelSettings}
+								onProviderChange={onProviderChange}
+								persistSelection={executionTarget !== "cloud"}
+								provider={provider}
+							/>
+						)}
+					</div>
+					{piSelectionOnly ? null : (
+						<Select
+							disabled={cloudSettingsLocked || modelSupportsReasoning !== true}
+							onValueChange={handleEffortChange}
+							value={EFFORT_LEVELS[effortIndex]?.value ?? "low"}
 						>
-							<Brain className="size-3" />
-							<span className="max-[560px]:sr-only">
-								<SelectValue>{effortLabel}</SelectValue>
-							</span>
-						</SelectTrigger>
-						<SelectContent align="start">
-							{EFFORT_LEVELS.map((option) => (
-								<SelectItem key={option.value} value={option.value}>
-									{option.label}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+							<SelectTrigger
+								aria-label="Thinking level"
+								className="gap-1.5 border-0 px-2 text-sm shadow-none data-[size=sm]:h-7 [&>svg:last-child]:hidden max-[560px]:size-7 max-[560px]:justify-center max-[560px]:p-0 bg-transparent! hover:bg-surface-hover!"
+								size="sm"
+								title={
+									cloudSettingsLocked
+										? "Thinking level is fixed when a cloud session starts"
+										: modelSupportsReasoning === false
+											? "The selected model does not report reasoning support"
+											: undefined
+								}
+							>
+								<Brain className="size-3" />
+								<span className="max-[560px]:sr-only">
+									<SelectValue>{effortLabel}</SelectValue>
+								</span>
+							</SelectTrigger>
+							<SelectContent align="start">
+								{EFFORT_LEVELS.map((option) => (
+									<SelectItem key={option.value} value={option.value}>
+										{option.label}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					)}
 				</div>
 
 				<div className="ml-auto flex min-w-0 items-center gap-2 max-[560px]:shrink-0">

@@ -349,12 +349,10 @@ describe("cloud agents gate", () => {
 		const { isCloudAgentsAvailable } = await import("./feature-flags");
 		mocks.getFlagPayload.mockReturnValue("control");
 		expect(isCloudAgentsAvailable()).toBe(false);
-		expect(mocks.getBooleanFlagEnabled).toHaveBeenCalledWith(
-			"code-cloud-agents",
-		);
+		expect(mocks.getBooleanFlagEnabled).not.toHaveBeenCalled();
 	});
 
-	it("needs both the rollout flag and the user's opt-in to enable", async () => {
+	it("cannot enable Cline Cloud through an old rollout or saved preference", async () => {
 		const { isCloudAgentsEnabled, isCloudAgentsAvailable } = await import(
 			"./feature-flags"
 		);
@@ -362,21 +360,21 @@ describe("cloud agents gate", () => {
 		mocks.getBooleanFlagEnabled.mockImplementation(
 			(flag: unknown) => flag === "code-cloud-agents",
 		);
-		expect(isCloudAgentsAvailable()).toBe(true);
+		expect(isCloudAgentsAvailable()).toBe(false);
 		setCloudSessionsEnabled(false);
 		expect(isCloudAgentsEnabled()).toBe(false);
 		setCloudSessionsEnabled(true);
-		expect(isCloudAgentsEnabled()).toBe(true);
+		expect(isCloudAgentsEnabled()).toBe(false);
 	});
 
-	it("lets the env override force the gate in both directions", async () => {
+	it("ignores the legacy environment override in an account-free desktop", async () => {
 		const { isCloudAgentsEnabled, isCloudAgentsAvailable } = await import(
 			"./feature-flags"
 		);
 		mocks.getFlagPayload.mockReturnValue(undefined);
 		process.env.CLINE_CODE_CLOUD_AGENTS = "1";
-		expect(isCloudAgentsAvailable()).toBe(true);
-		expect(isCloudAgentsEnabled()).toBe(true);
+		expect(isCloudAgentsAvailable()).toBe(false);
+		expect(isCloudAgentsEnabled()).toBe(false);
 		process.env.CLINE_CODE_CLOUD_AGENTS = "0";
 		expect(isCloudAgentsEnabled()).toBe(false);
 	});

@@ -18,7 +18,7 @@ const EVENT_COPY: Record<
 > = {
 	taskCompletion: {
 		label: "Task completed",
-		description: "When Cline finishes a task or turn.",
+		description: "When Pi finishes a task or turn.",
 	},
 	approvalNeeded: {
 		label: "Approval needed",
@@ -26,7 +26,7 @@ const EVENT_COPY: Record<
 	},
 	questionAsked: {
 		label: "Question asked",
-		description: "When Cline needs an answer before continuing.",
+		description: "When Pi needs an answer before continuing.",
 	},
 	sessionError: {
 		label: "Session error",
@@ -109,7 +109,7 @@ export function NotificationSettings() {
 						Desktop notifications
 					</p>
 					<p className="text-sm text-muted-foreground">
-						Notify only while the Cline window is in the background. Clicking a
+						Notify only while the Pi Agent window is in the background. Clicking a
 						notification opens its session.
 					</p>
 					{permission === "denied" ? (

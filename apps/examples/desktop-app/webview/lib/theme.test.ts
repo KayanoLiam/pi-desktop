@@ -61,23 +61,34 @@ describe("hub theme", () => {
 		expect(document.documentElement.dataset.clineHubTheme).toBe("light");
 	});
 
-	it("defaults to dark when no saved or system preference is available", () => {
+	it("defaults to light only when no saved or system preference is available", () => {
 		expect(readStoredHubTheme()).toBeNull();
 		expect(readSystemHubTheme()).toBe(DEFAULT_HUB_THEME);
+		expect(syncHubTheme()).toBe("light");
+		runThemeBootstrap();
+		expect(document.documentElement.classList.contains("dark")).toBe(false);
+		expect(document.documentElement.dataset.clineHubTheme).toBe("light");
+	});
+
+	it("preserves the user's existing dark preference from before the Pi migration", () => {
+		window.localStorage.setItem("cline-hub-theme", "dark");
+		runThemeBootstrap();
 		expect(syncHubTheme()).toBe("dark");
 		expect(document.documentElement.classList.contains("dark")).toBe(true);
+		window.localStorage.setItem(HUB_THEME_STORAGE_KEY, "light");
+		expect(syncHubTheme()).toBe("light");
+	});
 
-		document.documentElement.classList.remove("dark");
-		delete document.documentElement.dataset.clineHubTheme;
+	it("continues to follow a dark OS preference when unsaved", () => {
+		setSystemTheme("dark");
 		runThemeBootstrap();
-
+		expect(syncHubTheme()).toBe("dark");
 		expect(document.documentElement.classList.contains("dark")).toBe(true);
-		expect(document.documentElement.dataset.clineHubTheme).toBe("dark");
 	});
 });
 
 describe("hub accent", () => {
-	it("defaults to violet and validates stored values", () => {
+	it("defaults to Pi coral and validates stored values", () => {
 		expect(readStoredHubAccent()).toBe(DEFAULT_HUB_ACCENT);
 		window.localStorage.setItem(HUB_ACCENT_STORAGE_KEY, "not-a-color");
 		expect(readStoredHubAccent()).toBe(DEFAULT_HUB_ACCENT);

@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("desktop settings commands", () => {
-	it("loads cloud-only models only for an enabled cloud picker", async () => {
+	it("does not load Cline Cloud models even with a legacy cloud override", async () => {
 		const { ctx } = createContext();
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
 			if (String(input) === "https://models.dev/api.json") {
@@ -73,7 +73,7 @@ describe("desktop settings commands", () => {
 			provider: "cline",
 			includeCloudModels: true,
 		})) as { models: Array<{ id: string }> };
-		expect(cloud.models).toContainEqual(
+		expect(cloud.models).not.toContainEqual(
 			expect.objectContaining({ id: "cline-cloud/cloud-only" }),
 		);
 	});

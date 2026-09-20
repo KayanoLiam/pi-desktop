@@ -2258,12 +2258,12 @@ describe("ChatMessages credential failures", () => {
 		sessionId: "session-1",
 		role: "error",
 		content:
-			"The run failed: cline requires re-authentication. Sign in to Cline again in Settings → Account, then try again.",
+			"The run failed: cline requires re-authentication. Check your model connection in Settings → API Providers, then try again.",
 		createdAt: 2,
 		meta: { reason: "credentials", providerId: "cline" },
 	};
 
-	it("offers a sign-in action inside the failure bubble and shows the failure once", async () => {
+	it("offers a fix action inside the failure bubble and shows the failure once", async () => {
 		const onFixCredentials = vi.fn();
 		await renderMessages([failure], {
 			error: failure.content,
@@ -2281,11 +2281,11 @@ describe("ChatMessages credential failures", () => {
 		).toHaveLength(2);
 
 		const action = [...(bubble?.querySelectorAll("button") ?? [])].find(
-			(button) => button.textContent === "Sign in to Cline",
+			(button) => button.textContent === "Open API providers",
 		);
 		expect(action).toBeDefined();
 		await act(async () => action?.click());
-		expect(onFixCredentials).toHaveBeenCalledWith("account");
+		expect(onFixCredentials).toHaveBeenCalledWith("models");
 	});
 
 	it("points other providers at model settings and skips local-auth providers", async () => {
@@ -2308,9 +2308,7 @@ describe("ChatMessages credential failures", () => {
 		);
 
 		const buttons = [...container.querySelectorAll("button")].filter(
-			(button) =>
-				button.textContent === "Open API providers" ||
-				button.textContent === "Sign in to Cline",
+			(button) => button.textContent === "Open API providers",
 		);
 		expect(buttons.map((button) => button.textContent)).toEqual([
 			"Open API providers",

@@ -13,7 +13,6 @@ const ALL_SETTINGS_SECTIONS = [
 	"Schedules",
 	"Import",
 	"Remote",
-	"Account",
 ] as const;
 
 // Customize is the unified hub for everything that extends Cline — skills,

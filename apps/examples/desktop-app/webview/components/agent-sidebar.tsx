@@ -5,7 +5,6 @@ import {
 	ArrowRight,
 	Blocks,
 	ChevronDown,
-	CircleUserRound,
 	Clock3,
 	Cloud,
 	Filter,
@@ -36,7 +35,7 @@ import {
 	useState,
 } from "react";
 import { AppUpdateIndicator } from "@/components/app-update-indicator";
-import { ClineLogo } from "@/components/cline-logo";
+import { PiLogo } from "@/components/pi-logo";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -79,7 +78,6 @@ import {
 	SETTINGS_SECTIONS,
 	type SettingsSection,
 } from "@/components/views/settings/sections";
-import { useAccount } from "@/contexts/account-context";
 import { useHasConnectedProvider } from "@/hooks/use-has-connected-provider";
 import type {
 	SessionThread,
@@ -152,7 +150,6 @@ const SETTINGS_SECTION_ICONS = {
 	Schedules: Clock3,
 	Import: Import,
 	Remote: Network,
-	Account: CircleUserRound,
 	Customize: Blocks,
 	Marketplace: Store,
 } satisfies Record<SettingsSection, typeof Settings>;
@@ -286,14 +283,6 @@ export function AgentSidebar({
 }) {
 	const { isMobile, setOpen, setOpenMobile, state } = useSidebar();
 	const isCollapsed = !isMobile && state === "collapsed";
-	const { user, activeOrganization } = useAccount();
-	const { displayName, email } = user || {};
-	const username = displayName?.split(" ")?.[0] || email?.split("@")?.[0];
-	const accountName = username?.trim() || "Cline Desktop";
-	const accountScope = user
-		? (activeOrganization?.name ?? "Personal")
-		: undefined;
-	const accountInitial = accountName.charAt(0).toUpperCase();
 	const {
 		deleteThread: deleteHistoryThread,
 		forkThread: forkHistoryThread,
@@ -830,7 +819,7 @@ export function AgentSidebar({
 						>
 							<HoverCardTrigger asChild>
 								<button
-									aria-label="Cline home"
+									aria-label="Pi Agent home"
 									className={cn(
 										"flex size-8 shrink-0 items-center justify-center rounded-md text-sidebar-foreground hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 										isCollapsed && "size-9",
@@ -839,7 +828,7 @@ export function AgentSidebar({
 									title="Home"
 									type="button"
 								>
-									<ClineLogo className="size-5" />
+									<PiLogo className="size-7" />
 								</button>
 							</HoverCardTrigger>
 							<HoverCardContent
@@ -882,6 +871,11 @@ export function AgentSidebar({
 								</div>
 							</HoverCardContent>
 						</HoverCard>
+						{!isCollapsed ? (
+							<span className="ml-1 text-sm font-semibold tracking-tight">
+								Pi Agent
+							</span>
+						) : null}
 						{!isCollapsed && isBetaVersion(appVersion) ? (
 							<Badge
 								className="ml-0.5 px-1.5 py-0 text-[10px] uppercase tracking-wide"
@@ -916,7 +910,7 @@ export function AgentSidebar({
 					>
 						<Button
 							aria-current={newTaskActive ? "page" : undefined}
-							aria-label="New"
+							aria-label="New Session"
 							className={cn(
 								newTaskActive && "bg-surface-hover text-sidebar-foreground",
 							)}
@@ -926,10 +920,23 @@ export function AgentSidebar({
 							variant="sidebarItem"
 						>
 							<Plus className="size-4 shrink-0" />
-							<span className="truncate">Session</span>
+							<span className="truncate">New Session</span>
 						</Button>
 						<Button
-							aria-label="Schedule"
+							aria-label="Sessions"
+							onClick={openSessions}
+							type="button"
+							variant="sidebarItem"
+							className={cn(
+								view === "sessions" &&
+									"bg-surface-hover text-sidebar-foreground",
+							)}
+						>
+							<Clock3 className="size-4 shrink-0" />
+							<span className="truncate">Sessions</span>
+						</Button>
+						<Button
+							aria-label="Automations"
 							className={cn(
 								view === "settings" &&
 									settingsSection === "Schedules" &&
@@ -941,21 +948,21 @@ export function AgentSidebar({
 							variant="sidebarItem"
 						>
 							<Clock3 className="size-4 shrink-0" />
-							<span className="truncate">Schedule</span>
+							<span className="truncate">Automations</span>
 						</Button>
 						<Button
-							aria-label="Customize"
+							aria-label="Extensions"
 							className={cn(
 								customizeSectionOpen &&
 									"bg-surface-hover-lighter text-sidebar-foreground",
 							)}
 							onClick={() => openSettingsSection("Customize")}
-							title="Customize Cline with plugins, rules, and more"
+							title="Extensions and customization"
 							type="button"
 							variant="sidebarItem"
 						>
 							<Blocks className="size-4 shrink-0" />
-							<span className="truncate">Customize</span>
+							<span className="truncate">Extensions</span>
 						</Button>
 						{customizeSectionOpen
 							? CUSTOMIZATION_SECTIONS.map((section) => (
@@ -1209,68 +1216,21 @@ export function AgentSidebar({
 						isCollapsed ? "px-1.5" : "px-2",
 					)}
 				>
-					{user && !isCollapsed ? (
-						<div className="flex min-w-0 items-center gap-2">
-							<button
-								aria-label="Account settings"
-								className={cn(
-									"flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-2 text-left text-sidebar-foreground hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-									view === "settings" &&
-										settingsSection === "Account" &&
-										"bg-surface-hover text-sidebar-foreground",
-								)}
-								onClick={() => openSettingsSection("Account")}
-								title={user.email || undefined}
-								type="button"
-							>
-								<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-									{accountInitial}
-								</span>
-								<span className="flex min-w-0 flex-col leading-tight">
-									<span className="truncate text-sm font-medium">
-										{accountName}
-									</span>
-									{accountScope ? (
-										<span className="truncate text-[11px] text-muted-foreground">
-											{accountScope}
-										</span>
-									) : null}
-								</span>
-							</button>
-							<Button
-								aria-label="Settings"
-								className={cn(
-									"size-9 shrink-0 justify-center px-0",
-									view === "settings" &&
-										settingsSection !== "Account" &&
-										"bg-surface-hover text-sidebar-foreground",
-								)}
-								onClick={openSettings}
-								title="Settings"
-								type="button"
-								variant="sidebarItem"
-							>
-								<Settings className="size-4" />
-							</Button>
-						</div>
-					) : (
-						<Button
-							aria-label="Settings"
-							className={cn(
-								"min-w-0 justify-start",
-								isCollapsed && "size-9 justify-center px-0",
-								view === "settings" &&
-									"bg-surface-hover text-sidebar-foreground",
-							)}
-							onClick={openSettings}
-							title="Settings"
-							type="button"
-							variant="sidebarItem"
-						>
-							<Settings className="size-4" />
-							{!isCollapsed ? "Settings" : null}
-						</Button>
-					)}
+					<Button
+						aria-label="Settings"
+						className={cn(
+							"min-w-0 justify-start",
+							isCollapsed && "size-9 justify-center px-0",
+							view === "settings" && "bg-surface-hover text-sidebar-foreground",
+						)}
+						onClick={openSettings}
+						title="Settings"
+						type="button"
+						variant="sidebarItem"
+					>
+						<Settings className="size-4" />
+						{!isCollapsed ? "Settings" : null}
+					</Button>
 				</div>
 			</div>
 			<AlertDialog

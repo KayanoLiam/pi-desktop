@@ -171,7 +171,7 @@ describe("desktop notifications", () => {
 
 		await vi.waitFor(() =>
 			expect(mocks.invoke).toHaveBeenCalledWith("show_session_notification", {
-				title: "Cline has a question",
+				title: "Pi has a question",
 				body: "Which branch should I use?",
 				sessionId: "session-4",
 				sound: "Default",

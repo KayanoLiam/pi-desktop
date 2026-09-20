@@ -1,8 +1,8 @@
-export const HUB_THEME_STORAGE_KEY = "cline-hub-theme";
+export const HUB_THEME_STORAGE_KEY = "pi.desktop.theme.v1";
 
 export type HubTheme = "light" | "dark";
 
-export const DEFAULT_HUB_THEME: HubTheme = "dark";
+export const DEFAULT_HUB_THEME: HubTheme = "light";
 
 /**
  * Runs from the document head before the webview paints. Keep this
@@ -13,7 +13,7 @@ export const HUB_THEME_BOOTSTRAP_SCRIPT = `(() => {
 	let theme;
 
 	try {
-		const stored = window.localStorage.getItem(${JSON.stringify(HUB_THEME_STORAGE_KEY)});
+		const stored = window.localStorage.getItem(${JSON.stringify(HUB_THEME_STORAGE_KEY)}) ?? window.localStorage.getItem("cline-hub-theme");
 		if (stored === "light" || stored === "dark") {
 			theme = stored;
 		}
@@ -21,16 +21,10 @@ export const HUB_THEME_BOOTSTRAP_SCRIPT = `(() => {
 
 	if (!theme) {
 		try {
-			if (typeof window.matchMedia === "function") {
-				if (window.matchMedia("(prefers-color-scheme: light)").matches) {
-					theme = "light";
-				} else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-					theme = "dark";
-				}
-			}
+			if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) theme = "dark";
+			else if (window.matchMedia?.("(prefers-color-scheme: light)").matches) theme = "light";
 		} catch {}
 	}
-
 	if (!theme) {
 		theme = ${JSON.stringify(DEFAULT_HUB_THEME)};
 	}
@@ -40,7 +34,9 @@ export const HUB_THEME_BOOTSTRAP_SCRIPT = `(() => {
 
 export function readStoredHubTheme(): HubTheme | null {
 	try {
-		const stored = window.localStorage.getItem(HUB_THEME_STORAGE_KEY);
+		const stored =
+			window.localStorage.getItem(HUB_THEME_STORAGE_KEY) ??
+			window.localStorage.getItem("cline-hub-theme");
 		return stored === "light" || stored === "dark" ? stored : null;
 	} catch {
 		return null;
@@ -90,11 +86,12 @@ export function setStoredHubTheme(theme: HubTheme): HubTheme {
 export const HUB_ACCENT_STORAGE_KEY = "cline.code.accent.v1";
 
 /**
- * Accent palettes selectable in Settings. "violet" is the built-in brand
- * accent from @cline/ui tokens; the others override the interactive tokens
+ * Accent palettes selectable in Settings. "coral" is Pi's supplied logo
+ * accent; the other choices override the interactive tokens
  * via `[data-cline-accent]` blocks in globals.css.
  */
 export const HUB_ACCENTS = [
+	"coral",
 	"violet",
 	"graphite",
 	"cyan",
@@ -105,7 +102,7 @@ export const HUB_ACCENTS = [
 
 export type HubAccent = (typeof HUB_ACCENTS)[number];
 
-export const DEFAULT_HUB_ACCENT: HubAccent = "violet";
+export const DEFAULT_HUB_ACCENT: HubAccent = "coral";
 
 export function isHubAccent(value: unknown): value is HubAccent {
 	return (

@@ -1,6 +1,6 @@
 import { providerOffersModelTool } from "@cline/llms/browser";
 import { Switch } from "@cline/ui";
-import { Minus, Plus, RotateCcw } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,6 @@ import {
 	setStoredAppIcon,
 } from "@/lib/app-icon";
 import { desktopClient } from "@/lib/desktop-client";
-import { resetOnboarding } from "@/lib/onboarding";
 import {
 	getProviderAuthKind,
 	isProviderConnected,
@@ -62,7 +61,6 @@ import {
 import { cn } from "@/lib/utils";
 import { MarketplaceExplorerView } from "../marketplace-explorer-view";
 import { PageFrame, PageHeader } from "../page-layout";
-import { AccountView } from "./account-view";
 import { AddProviderContent, type AddProviderPayload } from "./add-provider";
 import { ChannelsContent } from "./channels-view";
 import { CustomizeView } from "./customize-view";
@@ -628,8 +626,6 @@ export function SettingsView({
 			<ImportContent />
 		) : activeNav === "Remote" ? (
 			<RemoteEnvironmentsContent />
-		) : activeNav === "Account" ? (
-			<AccountView />
 		) : activeNav === "General" ? (
 			<GeneralSettingsContent
 				onOpenModelProviders={() => onNavigateSection("API Providers")}
@@ -652,9 +648,10 @@ export function SettingsView({
 /**
  * Swatches shown in the accent picker. The swatch color is the accent's
  * light-mode primary (see the [data-cline-accent] blocks in globals.css);
- * violet reads the live brand token so it always matches the default theme.
+ * coral matches the supplied Pi logo; existing accent choices remain available.
  */
 const ACCENT_OPTIONS: { id: HubAccent; label: string; swatch: string }[] = [
+	{ id: "coral", label: "Coral", swatch: "#ed948b" },
 	{ id: "violet", label: "Violet", swatch: "var(--brand-violet)" },
 	{ id: "graphite", label: "Graphite", swatch: "oklch(0.27 0.012 248)" },
 	{ id: "cyan", label: "Cyan", swatch: "oklch(0.6 0.12 222)" },
@@ -673,7 +670,7 @@ function GeneralSettingsContent({
 		return readStoredHubTheme() ?? readSystemHubTheme();
 	});
 	const [accent, setAccent] = useState<HubAccent>(() => {
-		if (typeof window === "undefined") return "violet";
+		if (typeof window === "undefined") return "coral";
 		return readStoredHubAccent();
 	});
 	const [fontSize, setFontSize] = useState(() => {
@@ -966,12 +963,6 @@ function GeneralSettingsContent({
 		}
 	};
 
-	// resetOnboarding dispatches ONBOARDING_RESET_EVENT, which the app shell
-	// listens for to re-enter the first-run flow immediately.
-	const replayOnboarding = () => {
-		resetOnboarding();
-	};
-
 	return (
 		<PageFrame>
 			<PageHeader
@@ -1072,7 +1063,7 @@ function GeneralSettingsContent({
 					<div className="flex flex-col gap-1">
 						<p className="text-base font-semibold text-foreground">App icon</p>
 						<p className="text-sm text-muted-foreground">
-							Pick the icon Cline shows in the {appIconLocation}.
+							Pick the icon Pi Agent shows in the {appIconLocation}.
 						</p>
 						{appIconError ? (
 							<p className="mt-2 text-xs text-destructive" role="alert">
@@ -1143,8 +1134,7 @@ function GeneralSettingsContent({
 								>
 									Connect a provider
 								</button>{" "}
-								that supports it, such as Anthropic, OpenAI, Google Gemini, or
-								Cline.
+								that supports it, such as Anthropic, OpenAI, or Google Gemini.
 							</p>
 						)}
 						{webSearchError ? (
@@ -1241,27 +1231,6 @@ function GeneralSettingsContent({
 						disabled={telemetryLoading || telemetrySaving}
 						onCheckedChange={(checked) => void updateTelemetryOptOut(!checked)}
 					/>
-				</div>
-				<div className="flex py-4 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-					<div className="flex flex-col gap-1">
-						<p className="text-base font-semibold text-foreground">
-							New user experience
-						</p>
-						<p className="text-sm text-muted-foreground">
-							Replay the first-run experience new users see when they open Cline
-							for the first time.
-						</p>
-					</div>
-					<Button
-						className="shrink-0"
-						onClick={replayOnboarding}
-						size="sm"
-						type="button"
-						variant="outline"
-					>
-						<RotateCcw className="size-3" />
-						Replay
-					</Button>
 				</div>
 				<div className="flex py-4 items-center justify-between gap-5 max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
 					<div className="flex flex-col gap-1">

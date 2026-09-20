@@ -3,15 +3,17 @@ import { desktopClient, isTauriAvailable } from "@/lib/desktop-client";
 export const APP_ICON_STORAGE_KEY = "cline.code.app-icon.v1";
 
 /**
- * App icon variants selectable in Settings. "midnight" is the icon bundled
- * with the app; the others live in webview/public/app-icons (picker +
- * browser favicon) and src-tauri/icons/app (runtime app icon resources).
+ * App icon variants selectable in Settings: the Pi mark on four backgrounds.
+ * "midnight" (paper, matching the supplied logo) is the icon bundled with the
+ * app; all variants live in webview/public/app-icons (picker + browser
+ * favicon) and src-tauri/icons/app (runtime app icon resources). IDs are kept
+ * stable for saved preferences and the Rust APP_ICONS list.
  */
 export const APP_ICONS = [
-	{ id: "classic", label: "Classic" },
-	{ id: "midnight", label: "Midnight" },
-	{ id: "hologram", label: "Hologram" },
-	{ id: "chip", label: "Chip" },
+	{ id: "classic", label: "Light" },
+	{ id: "midnight", label: "Paper" },
+	{ id: "hologram", label: "Dark" },
+	{ id: "chip", label: "Coral" },
 ] as const;
 
 export type AppIconId = (typeof APP_ICONS)[number]["id"];

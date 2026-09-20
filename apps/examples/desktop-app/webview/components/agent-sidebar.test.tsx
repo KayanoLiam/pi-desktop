@@ -9,7 +9,6 @@ import {
 	getSessionOverviewTitle,
 } from "@/components/agent-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { AccountProvider } from "@/contexts/account-context";
 import type {
 	SessionThread,
 	UseSessionHistoryResult,
@@ -871,103 +870,56 @@ describe("AgentSidebar session organization", () => {
 		expect(loadOlderSessions).toHaveBeenCalledOnce();
 	});
 
-	it("shows the signed-in account and active organization in the footer", async () => {
-		invoke.mockResolvedValue(signedInUser);
-
-		await act(async () => {
-			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
-			);
-		});
-
-		await vi.waitFor(() => {
-			expect(container.textContent).toContain("Beatrix");
-			expect(container.textContent).toContain("Cline Bot Inc");
-		});
-		expect(container.textContent).not.toContain("Cline Desktop");
-		expect(container.textContent).not.toContain("Local");
-		const accountButton = container.querySelector(
-			'[aria-label="Account settings"]',
+	it("does not render an account or fetch identity even with a legacy cached login", async () => {
+		window.localStorage.setItem(
+			"cline.code.account-identity.v1",
+			JSON.stringify({ user: signedInUser }),
 		);
-		const settingsButton = container.querySelector('[aria-label="Settings"]');
-		expect(accountButton?.parentElement).toBe(settingsButton?.parentElement);
-		expect(settingsButton?.textContent).toBe("");
-		const accountName = [
-			...(accountButton?.querySelectorAll("span") ?? []),
-		].find((element) => element.textContent === "Beatrix");
-		const organizationName = [
-			...(accountButton?.querySelectorAll("span") ?? []),
-		].find((element) => element.textContent === "Cline Bot Inc");
-		expect(accountName?.nextElementSibling).toBe(organizationName);
-		expect(accountName?.parentElement?.className).toContain("flex-col");
-	});
-
-	it("opens the Account settings section when the footer account row is clicked", async () => {
-		const setView = vi.fn();
-		const onSettingsSectionChange = vi.fn();
-		invoke.mockResolvedValue(signedInUser);
-
-		await act(async () => {
+		await act(async () =>
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={onSettingsSectionChange}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={setView}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
-			);
-		});
-
-		const accountButton = await vi.waitFor(() => {
-			const button = container.querySelector('[aria-label="Account settings"]');
-			expect(button).not.toBeNull();
-			return button;
-		});
-		await click(accountButton as Element);
-
-		expect(onSettingsSectionChange).toHaveBeenCalledWith("Account");
-		expect(setView).not.toHaveBeenCalled();
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
+			),
+		);
+		expect(
+			container.querySelector('[aria-label="Account settings"]'),
+		).toBeNull();
+		expect(container.textContent).not.toContain("Beatrix");
+		expect(container.querySelector('[aria-label="Settings"]')).not.toBeNull();
+		expect(
+			invoke.mock.calls.some(([command]) => command === "cline_account"),
+		).toBe(false);
 	});
 
 	it("opens the General settings section from the gear in any section", async () => {
 		invoke.mockResolvedValue(signedInUser);
 		const onSettingsSectionChange = vi.fn();
 
-		const renderSidebar = async (settingsSection: "Account" | "General") => {
+		const renderSidebar = async (
+			settingsSection: "API Providers" | "General",
+		) => {
 			await act(async () => {
 				root.render(
-					<AccountProvider>
-						<SidebarProvider>
-							<AgentSidebar
-								activeSessionId={null}
-								onHome={vi.fn()}
-								onSettingsSectionChange={onSettingsSectionChange}
-								sessionHistory={makeSessionHistory([], vi.fn())}
-								setView={vi.fn()}
-								settingsSection={settingsSection}
-								view="settings"
-							/>
-						</SidebarProvider>
-					</AccountProvider>,
+					<SidebarProvider>
+						<AgentSidebar
+							activeSessionId={null}
+							onHome={vi.fn()}
+							onSettingsSectionChange={onSettingsSectionChange}
+							sessionHistory={makeSessionHistory([], vi.fn())}
+							setView={vi.fn()}
+							settingsSection={settingsSection}
+							view="settings"
+						/>
+					</SidebarProvider>,
 				);
 			});
 			return vi.waitFor(() => {
@@ -977,14 +929,11 @@ describe("AgentSidebar session organization", () => {
 			});
 		};
 
-		// The Account screen leaves the gear un-highlighted, but clicking it
-		// still navigates to General rather than acting as a no-op.
+		// Any settings section keeps the settings button highlighted and clickable.
 		// (split on spaces: the variant's hover:bg-surface-hover would match a
 		// plain substring check)
-		const gearOnAccount = await renderSidebar("Account");
-		expect(gearOnAccount.className.split(" ")).not.toContain(
-			"bg-surface-hover",
-		);
+		const gearOnAccount = await renderSidebar("API Providers");
+		expect(gearOnAccount.className.split(" ")).toContain("bg-surface-hover");
 		await click(gearOnAccount);
 		expect(onSettingsSectionChange).toHaveBeenCalledWith("General");
 
@@ -1010,23 +959,21 @@ describe("AgentSidebar session organization", () => {
 
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={onHome}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={onHome}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
-		const logoButton = container.querySelector('[aria-label="Cline home"]');
+		const logoButton = container.querySelector('[aria-label="Pi Agent home"]');
 		expect(logoButton).not.toBeNull();
 		expect(document.body.textContent).not.toContain("Version 1.2.3");
 
@@ -1058,23 +1005,21 @@ describe("AgentSidebar session organization", () => {
 
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
-		const logoButton = container.querySelector('[aria-label="Cline home"]');
+		const logoButton = container.querySelector('[aria-label="Pi Agent home"]');
 		expect(logoButton).not.toBeNull();
 		await hover(logoButton as Element);
 
@@ -1092,23 +1037,21 @@ describe("AgentSidebar session organization", () => {
 
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							canNavigateBack
-							canNavigateForward
-							onHome={vi.fn()}
-							onNavigateBack={onNavigateBack}
-							onNavigateForward={onNavigateForward}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						canNavigateBack
+						canNavigateForward
+						onHome={vi.fn()}
+						onNavigateBack={onNavigateBack}
+						onNavigateForward={onNavigateForward}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
@@ -1124,28 +1067,26 @@ describe("AgentSidebar session organization", () => {
 		expect(onNavigateForward).toHaveBeenCalledOnce();
 	});
 
-	it("stacks New, Schedule, and Customize as full-width rows below the logo", async () => {
+	it("stacks Pi's session, history, automation and extension actions below the logo", async () => {
 		const onHome = vi.fn();
 		const onSettingsSectionChange = vi.fn();
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={onHome}
-							onSettingsSectionChange={onSettingsSectionChange}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={onHome}
+						onSettingsSectionChange={onSettingsSectionChange}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
-		const logo = container.querySelector('[aria-label="Cline home"]');
+		const logo = container.querySelector('[aria-label="Pi Agent home"]');
 		const actionsNav = container.querySelector(
 			'[aria-label="Sidebar actions"]',
 		);
@@ -1157,20 +1098,21 @@ describe("AgentSidebar session organization", () => {
 			...(actionsNav?.querySelectorAll<HTMLButtonElement>("button") ?? []),
 		];
 		expect(rows.map((row) => row.textContent)).toEqual([
-			"Session",
-			"Schedule",
-			"Customize",
+			"New Session",
+			"Sessions",
+			"Automations",
+			"Extensions",
 		]);
 		for (const row of rows) {
 			expect(row.className).toContain("w-full");
 		}
 		expect(actionsNav?.contains(logo as Element)).toBe(false);
 
-		await click(buttonWithText("Session", actionsNav as ParentNode));
+		await click(buttonWithText("New Session", actionsNav as ParentNode));
 		expect(onHome).toHaveBeenCalledOnce();
-		await click(buttonWithText("Schedule", actionsNav as ParentNode));
+		await click(buttonWithText("Automations", actionsNav as ParentNode));
 		expect(onSettingsSectionChange).toHaveBeenCalledWith("Schedules");
-		await click(buttonWithText("Customize", actionsNav as ParentNode));
+		await click(buttonWithText("Extensions", actionsNav as ParentNode));
 		expect(onSettingsSectionChange).toHaveBeenCalledWith("Customize");
 	});
 
@@ -1179,19 +1121,17 @@ describe("AgentSidebar session organization", () => {
 		const renderSidebar = async (section: "Customize" | "Marketplace") => {
 			await act(async () => {
 				root.render(
-					<AccountProvider>
-						<SidebarProvider>
-							<AgentSidebar
-								activeSessionId={null}
-								onHome={vi.fn()}
-								onSettingsSectionChange={onSettingsSectionChange}
-								sessionHistory={makeSessionHistory([], vi.fn())}
-								setView={vi.fn()}
-								settingsSection={section}
-								view="settings"
-							/>
-						</SidebarProvider>
-					</AccountProvider>,
+					<SidebarProvider>
+						<AgentSidebar
+							activeSessionId={null}
+							onHome={vi.fn()}
+							onSettingsSectionChange={onSettingsSectionChange}
+							sessionHistory={makeSessionHistory([], vi.fn())}
+							setView={vi.fn()}
+							settingsSection={section}
+							view="settings"
+						/>
+					</SidebarProvider>,
 				);
 			});
 		};
@@ -1202,7 +1142,7 @@ describe("AgentSidebar session organization", () => {
 		) as ParentNode;
 		const installedRow = buttonWithText("Installed", actionsNav);
 		const marketplaceRow = buttonWithText("Marketplace", actionsNav);
-		const customizeRow = buttonWithText("Customize", actionsNav);
+		const customizeRow = buttonWithText("Extensions", actionsNav);
 
 		// The active sub-tab carries the full selected background; the parent
 		// Customize row stays marked with a subtler highlight so the two
@@ -1231,20 +1171,18 @@ describe("AgentSidebar session organization", () => {
 		const renderSidebar = async (newTaskActive: boolean) => {
 			await act(async () => {
 				root.render(
-					<AccountProvider>
-						<SidebarProvider>
-							<AgentSidebar
-								activeSessionId={null}
-								newTaskActive={newTaskActive}
-								onHome={vi.fn()}
-								onSettingsSectionChange={vi.fn()}
-								sessionHistory={makeSessionHistory([], vi.fn())}
-								setView={vi.fn()}
-								settingsSection="General"
-								view="chat"
-							/>
-						</SidebarProvider>
-					</AccountProvider>,
+					<SidebarProvider>
+						<AgentSidebar
+							activeSessionId={null}
+							newTaskActive={newTaskActive}
+							onHome={vi.fn()}
+							onSettingsSectionChange={vi.fn()}
+							sessionHistory={makeSessionHistory([], vi.fn())}
+							setView={vi.fn()}
+							settingsSection="General"
+							view="chat"
+						/>
+					</SidebarProvider>,
 				);
 			});
 			return buttonWithText(
@@ -1270,20 +1208,18 @@ describe("AgentSidebar session organization", () => {
 		const onOpenSearch = vi.fn();
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onOpenSearch={onOpenSearch}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={sessionHistory}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onOpenSearch={onOpenSearch}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={sessionHistory}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
@@ -1302,26 +1238,26 @@ describe("AgentSidebar session organization", () => {
 		expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
 	});
 
-	it("uses only the Cline logo for home in the collapsed sidebar", async () => {
+	it("uses only the Pi logo for home in the collapsed sidebar", async () => {
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider defaultOpen={false}>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider defaultOpen={false}>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
-		expect(container.querySelector('[aria-label="Cline home"]')).not.toBeNull();
+		expect(
+			container.querySelector('[aria-label="Pi Agent home"]'),
+		).not.toBeNull();
 		expect(
 			container.querySelector('[aria-label="Sidebar actions"]'),
 		).toBeNull();
@@ -1333,19 +1269,17 @@ describe("AgentSidebar session organization", () => {
 	it("uses a compact overlay-friendly width in collapsed settings", async () => {
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider defaultOpen={false}>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="Account"
-							view="settings"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider defaultOpen={false}>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="API Providers"
+						view="settings"
+					/>
+				</SidebarProvider>,
 			);
 		});
 
@@ -1360,9 +1294,9 @@ describe("AgentSidebar session organization", () => {
 			container.querySelector('[aria-label="Settings sections"]'),
 		).not.toBeNull();
 		const leftAlignedButtons = [
-			"Cline home",
+			"Pi Agent home",
 			"General",
-			"Account",
+			"API Providers",
 			"Expand sidebar",
 			"Settings",
 		];
@@ -1381,19 +1315,17 @@ describe("AgentSidebar session organization", () => {
 	it("shows only the labeled Settings button when signed out", async () => {
 		await act(async () => {
 			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={vi.fn()}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="General"
+						view="chat"
+					/>
+				</SidebarProvider>,
 			);
 		});
 

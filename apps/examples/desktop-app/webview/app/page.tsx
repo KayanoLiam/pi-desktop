@@ -38,15 +38,12 @@ import { ChatMessages } from "@/components/views/chat/chat-messages";
 import { EnvironmentSelector } from "@/components/views/chat/environment-selector";
 import { RemoteDirectoryPicker } from "@/components/views/chat/remote-directory-picker";
 import { WelcomeScreen } from "@/components/views/chat/welcome-chat";
-import { WelcomeSetupNotice } from "@/components/views/chat/welcome-setup-notice";
-import type { OnboardingStep } from "@/components/views/onboarding/onboarding-view";
 import type { SettingsSection } from "@/components/views/settings/sections";
 import {
 	WindowTitleBar,
 	WindowTitleBarContent,
 	WindowTitleBarProvider,
 } from "@/components/window-title-bar";
-import { AccountProvider, useAccount } from "@/contexts/account-context";
 import { WorkspaceProvider } from "@/contexts/workspace-context";
 import type { ProcessContext } from "@/hooks/chat-session/types";
 import { checkForUpdateAndNotify, useAppUpdate } from "@/hooks/use-app-update";
@@ -58,7 +55,6 @@ import { toast } from "@/hooks/use-toast";
 import { applyAppZoomAction, syncAppFontSize } from "@/lib/app-font-size";
 import { syncAppIcon } from "@/lib/app-icon";
 import type { ChatSessionConfig } from "@/lib/chat-schema";
-import { openPersonalGitHubInstallUrl } from "@/lib/cline-integrations";
 import { cloudRepositoryLabel } from "@/lib/cloud-repositories";
 import {
 	humanizeCloudSessionError,
@@ -70,7 +66,7 @@ import {
 	type DesktopAppView,
 	desktopAppReducer,
 } from "@/lib/desktop-app-state";
-import { desktopClient, openExternalUrl } from "@/lib/desktop-client";
+import { desktopClient } from "@/lib/desktop-client";
 import { watchDesktopNotifications } from "@/lib/desktop-notifications";
 import {
 	subscribeToDesktopActions,
@@ -84,13 +80,7 @@ import {
 	isUnsupportedImageAttachment,
 } from "@/lib/image-attachments";
 import { createLatestSuccessfulRequestGate } from "@/lib/latest-successful-request";
-import {
-	hasCompletedOnboarding,
-	markOnboardingCompleted,
-	ONBOARDING_RESET_EVENT,
-} from "@/lib/onboarding";
 import { requestPromptInputFocus } from "@/lib/prompt-input-focus";
-import { isProviderConnected } from "@/lib/provider-connection";
 import {
 	fetchProviderCatalog,
 	readProviderCatalogSnapshot,
@@ -161,17 +151,6 @@ const SessionsView = dynamic(
 			(module) => module.SessionsView,
 		),
 	{ loading: viewLoading, ssr: false },
-);
-
-const OnboardingView = dynamic(
-	() =>
-		import("@/components/views/onboarding/onboarding-view").then(
-			(module) => module.OnboardingView,
-		),
-	{
-		loading: () => <div className="h-full w-full bg-background" />,
-		ssr: false,
-	},
 );
 
 const DiffView = dynamic(
@@ -288,17 +267,9 @@ export default function Home() {
 				LOCAL_WORKSPACE_ENVIRONMENT_ID,
 			),
 	);
-	// Starts false on both server and first client render (hydration-safe);
-	// the effect below reads the persisted state right after mount.
-	const [showOnboarding, setShowOnboarding] = useState(false);
 	const [commandBarOpen, setCommandBarOpen] = useState(false);
 	// Shared by the sidebar search icon and the Cmd/Ctrl+P shortcut.
 	const handleOpenCommandBar = useCallback(() => setCommandBarOpen(true), []);
-	// "welcome" for the full first-run flow; "connect" when re-entered from
-	// the in-app "connect a model" notice, which should land directly on the
-	// provider setup step.
-	const [onboardingInitialStep, setOnboardingInitialStep] =
-		useState<OnboardingStep>("welcome");
 	const environmentSelectionRevision = useRef(0);
 	const [activeRemoteEnvironment, setActiveRemoteEnvironment] =
 		useState<RemoteWorkspaceEnvironment | null>(null);
@@ -337,14 +308,6 @@ export default function Home() {
 	}, []);
 
 	useAppUpdate();
-
-	useEffect(() => {
-		setShowOnboarding(!hasCompletedOnboarding());
-		const handleReset = () => setShowOnboarding(true);
-		window.addEventListener(ONBOARDING_RESET_EVENT, handleReset);
-		return () =>
-			window.removeEventListener(ONBOARDING_RESET_EVENT, handleReset);
-	}, []);
 
 	useEffect(() => {
 		syncHubTheme();
@@ -581,20 +544,6 @@ export default function Home() {
 		selectEnvironmentDraft(LOCAL_WORKSPACE_ENVIRONMENT_ID);
 	}, [selectEnvironmentDraft, view]);
 
-	const completeOnboarding = useCallback(() => {
-		markOnboardingCompleted();
-		setShowOnboarding(false);
-		setOnboardingInitialStep("welcome");
-		// A fresh thread remounts the chat pane so it picks up credentials and
-		// the provider/model selection configured during onboarding.
-		handleNewThread();
-	}, [handleNewThread]);
-
-	const handleOpenSetup = useCallback(() => {
-		setOnboardingInitialStep("connect");
-		setShowOnboarding(true);
-	}, []);
-
 	const handleOpenSession = useCallback(
 		(session: SessionHistoryItem, initialPromptDraft?: string) => {
 			dispatchApp({
@@ -696,9 +645,6 @@ export default function Home() {
 	// new session, and Cmd/Ctrl+, for settings.
 	useEffect(() => {
 		const handleKeyDown = (event: KeyboardEvent) => {
-			if (showOnboarding) {
-				return;
-			}
 			if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
 				return;
 			}
@@ -715,7 +661,7 @@ export default function Home() {
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [handleNewThread, handleViewChange, showOnboarding]);
+	}, [handleNewThread, handleViewChange]);
 	const handleThreadStarted = useCallback((threadId: string) => {
 		dispatchApp({ type: "thread-started", threadId });
 	}, []);
@@ -835,23 +781,10 @@ export default function Home() {
 	]);
 
 	return (
-		<AccountProvider>
+		<>
 			<SidebarProvider>
-				<WindowTitleBarProvider
-					contentEnabled={!showOnboarding && view === "chat"}
-				>
-					<div
-						aria-hidden={showOnboarding ? true : undefined}
-						className="flex h-screen w-full overflow-hidden bg-background text-foreground"
-						// The onboarding overlay is opaque and sits on top of the whole
-						// shell; hiding the shell keeps its aurora + animations from
-						// being composited every frame underneath while it still mounts
-						// and loads (providers, history, transport) in the background.
-						// `inert` additionally keeps the covered controls out of the
-						// keyboard tab order and assistive tech while it is hidden.
-						inert={showOnboarding ? true : undefined}
-						style={showOnboarding ? { visibility: "hidden" } : undefined}
-					>
+				<WindowTitleBarProvider contentEnabled={view === "chat"}>
+					<div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
 						<Sidebar
 							className="border-r border-sidebar-border"
 							collapsible="icon"
@@ -940,12 +873,11 @@ export default function Home() {
 											onNewThread={handleNewThread}
 											onOpenSession={handleOpenSession}
 											onOpenSessionById={handleOpenSessionById}
-											onOpenSetup={handleOpenSetup}
 											onOpenModelSettings={() =>
 												handleSettingsSectionChange("API Providers")
 											}
 											onOpenAccountSettings={() =>
-												handleSettingsSectionChange("Account")
+												handleSettingsSectionChange("API Providers")
 											}
 											parentSession={activeParentSession}
 											onThreadStarted={handleThreadStarted}
@@ -964,27 +896,13 @@ export default function Home() {
 							</div>
 						</SidebarInset>
 					</div>
-					{showOnboarding ? (
-						<div className="fixed inset-0 z-50 bg-background">
-							<WindowTitleBar
-								className="absolute inset-x-0 top-0 z-10"
-								hostContent={false}
-							/>
-							<div className="h-full">
-								<OnboardingView
-									initialStep={onboardingInitialStep}
-									onComplete={completeOnboarding}
-								/>
-							</div>
-						</div>
-					) : null}
 				</WindowTitleBarProvider>
 			</SidebarProvider>
 			<HubUpdateRequiredDialog />
 			<SessionCommandBar
 				onOpenChange={setCommandBarOpen}
 				onOpenSession={handleOpenSessionById}
-				open={commandBarOpen && !showOnboarding}
+				open={commandBarOpen}
 			/>
 			{remoteDirectoryPicker ? (
 				<RemoteDirectoryPicker
@@ -995,7 +913,7 @@ export default function Home() {
 					open
 				/>
 			) : null}
-		</AccountProvider>
+		</>
 	);
 }
 
@@ -1022,7 +940,6 @@ function ChatThreadPane({
 	onNewThread,
 	onOpenSession,
 	onOpenSessionById,
-	onOpenSetup,
 	onOpenModelSettings,
 	onOpenAccountSettings,
 	onPickRemoteWorkspaceDirectory,
@@ -1059,7 +976,6 @@ function ChatThreadPane({
 		environment: RemoteWorkspaceEnvironment,
 	) => Promise<string | null>;
 	onSelectEnvironment: (environmentId: string) => Promise<void>;
-	onOpenSetup?: () => void;
 	onOpenModelSettings?: () => void;
 	onOpenAccountSettings?: () => void;
 	parentSession?: { sessionId: string; title?: string };
@@ -1129,62 +1045,8 @@ function ChatThreadPane({
 	// Branch name, "no-git" once the folder is confirmed to not be a git
 	// repository, or null while branch discovery is pending.
 	const [gitBranch, setGitBranch] = useState<string | null>(null);
-	// Re-evaluate the account-targeted flag after sign-in changes.
-	const [cloudAgentsFlagEnabled, setCloudAgentsFlagEnabled] = useState(false);
-	const cloudAgentsEnabled =
-		cloudAgentsFlagEnabled && environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID;
-	const { user: accountUser, activeOrganization } = useAccount();
-	const accountUserId = accountUser?.id ?? null;
-	const openGitHubConnect = useCallback(
-		async (fallbackUrl: string) => {
-			if (activeOrganization) {
-				await openExternalUrl(fallbackUrl);
-				return;
-			}
-			await openPersonalGitHubInstallUrl(fallbackUrl);
-		},
-		[activeOrganization],
-	);
-	useEffect(() => {
-		void accountUserId;
-		let cancelled = false;
-		let retryTimer: number | undefined;
-		let attempts = 0;
-		const fetchFlags = () => {
-			desktopClient
-				.invoke("get_feature_flags", {})
-				.then((flags) => {
-					if (!cancelled) {
-						setCloudAgentsFlagEnabled(
-							Boolean((flags as { cloudAgents?: boolean })?.cloudAgents),
-						);
-					}
-				})
-				.catch(() => {
-					attempts += 1;
-					if (!cancelled && attempts < 10) {
-						retryTimer = window.setTimeout(fetchFlags, 2_000);
-					}
-				});
-		};
-		fetchFlags();
-		// Reflect Settings changes without restarting or switching accounts.
-		const unsubscribe = desktopClient.subscribe(
-			"feature_flags_changed",
-			(payload) => {
-				if (!cancelled) {
-					setCloudAgentsFlagEnabled(
-						Boolean((payload as { cloudAgents?: boolean })?.cloudAgents),
-					);
-				}
-			},
-		);
-		return () => {
-			cancelled = true;
-			unsubscribe();
-			if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-		};
-	}, [accountUserId]);
+	// This desktop no longer has a Cline account or Cline Cloud login flow.
+	const cloudAgentsEnabled = false;
 	// Worktrees are cut by the local sidecar's git, so they are only offered
 	// for the local environment. The choice also only holds while the
 	// workspace is a git repo; a plain folder (or pending discovery) silently
@@ -1210,10 +1072,7 @@ function ChatThreadPane({
 	const [providersLoaded, setProvidersLoaded] = useState(
 		() => readProviderCatalogSnapshot() !== null,
 	);
-	// null = unknown (catalog unavailable): never nag in that case.
-	const [hasConnectedProvider, setHasConnectedProvider] = useState<
-		boolean | null
-	>(null);
+
 	// History paths lead each merge: they are ordered by session recency, so
 	// stored or stale entries only append after them.
 	const [workspaces, setWorkspaces] = useState<string[]>(() =>
@@ -1345,7 +1204,6 @@ function ChatThreadPane({
 			}
 			const next: Record<string, { apiKey: string }> = {};
 			const nextContextWindows: Record<string, Record<string, number>> = {};
-			let anyConnected = false;
 			for (const provider of payload.providers ?? []) {
 				const id = provider.id?.trim();
 				if (!id) {
@@ -1354,9 +1212,6 @@ function ChatThreadPane({
 				next[id] = {
 					apiKey: provider.apiKey?.trim() ?? "",
 				};
-				if (isProviderConnected(provider)) {
-					anyConnected = true;
-				}
 				const contextWindows: Record<string, number> = {};
 				for (const model of provider.modelList ?? []) {
 					if (
@@ -1376,7 +1231,6 @@ function ChatThreadPane({
 			});
 			setProviderCredentials(next);
 			setProviderModelContextWindows(nextContextWindows);
-			setHasConnectedProvider(anyConnected);
 		} catch {
 			// Keep current config if provider catalog cannot be read.
 		} finally {
@@ -1735,6 +1589,12 @@ function ChatThreadPane({
 	]);
 
 	const isNewThread = startsNewThread(sessionId, messages);
+	// Migrate the local new-thread picker first. Existing Cline, remote, and
+	// cloud sessions retain their original model selection and execution paths.
+	const piSelectionOnly =
+		isNewThread &&
+		!isCloudSession &&
+		environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID;
 
 	const handleAttachFiles = useCallback(
 		(files: File[]) => {
@@ -1780,6 +1640,7 @@ function ChatThreadPane({
 
 	const handleSend = useCallback(
 		async (prompt: string) => {
+			if (piSelectionOnly) return;
 			const trimmed = prompt.trim();
 			if (!trimmed && pendingAttachments.length === 0) {
 				return;
@@ -1812,6 +1673,7 @@ function ChatThreadPane({
 			isNewThread,
 			onThreadStarted,
 			pendingAttachments,
+			piSelectionOnly,
 			sendPrompt,
 			sessionId,
 			setPendingAttachments,
@@ -2047,12 +1909,7 @@ function ChatThreadPane({
 				setShowDiffView(false);
 			}
 		},
-		[
-			providerCredentials.cline?.apiKey,
-			setConfig,
-			cloudAgentsEnabled,
-			setPendingAttachments,
-		],
+		[providerCredentials.cline?.apiKey, setConfig, setPendingAttachments],
 	);
 
 	// Reset only new composers when the flag turns off; existing sessions attach.
@@ -2066,30 +1923,11 @@ function ChatThreadPane({
 			handleExecutionTargetChange("local");
 		}
 	}, [
-		cloudAgentsEnabled,
 		config.executionTarget,
 		historySession,
 		handleExecutionTargetChange,
 		sessionId,
 	]);
-
-	const handleCloudRepoUrlChange = useCallback(
-		(repoUrl: string) => {
-			setConfig((prev) =>
-				prev.repoUrl === repoUrl ? prev : { ...prev, repoUrl },
-			);
-		},
-		[setConfig],
-	);
-
-	const handleCloudBranchChange = useCallback(
-		(branch: string) => {
-			setConfig((prev) =>
-				prev.branch === branch ? prev : { ...prev, branch },
-			);
-		},
-		[setConfig],
-	);
 
 	const attachmentList = useMemo(
 		() =>
@@ -2317,7 +2155,9 @@ function ChatThreadPane({
 	);
 
 	const isAppReady =
-		chatTransportState === "connected" && providersLoaded && workspacesLoaded;
+		chatTransportState === "connected" &&
+		(piSelectionOnly || providersLoaded) &&
+		workspacesLoaded;
 
 	if (!isAppReady) {
 		return (
@@ -2341,6 +2181,7 @@ function ChatThreadPane({
 
 	const composer = (
 		<ChatInputBar
+			piSelectionOnly={piSelectionOnly}
 			readOnly={isCloudSessionExpired}
 			attachments={attachmentList}
 			environmentId={environmentId}
@@ -2378,11 +2219,6 @@ function ChatThreadPane({
 			variant={isWelcomeState ? "welcome" : "conversation"}
 		/>
 	);
-
-	const cloudConnectUrl =
-		cloudSessionError?.code === "github_not_connected"
-			? cloudSessionError.connectUrl
-			: undefined;
 
 	return (
 		<WorkspaceProvider value={workspaceContextValue}>
@@ -2451,14 +2287,6 @@ function ChatThreadPane({
 								chatTransportState={chatTransportState}
 								activityLabel={activityLabel}
 								error={cloudSessionError?.message ?? displayedError}
-								errorAction={
-									cloudConnectUrl
-										? {
-												label: "Connect GitHub",
-												onClick: () => openGitHubConnect(cloudConnectUrl),
-											}
-										: undefined
-								}
 								importedFromTool={importedFromTool}
 								messages={displayedMessages}
 								onEditMessage={isCloudSession ? undefined : handleEditMessage}
@@ -2502,26 +2330,9 @@ function ChatThreadPane({
 						/>
 					}
 					gitBranch={gitBranch}
-					notice={
-						providersLoaded &&
-						hasConnectedProvider === false &&
-						onOpenSetup &&
-						onOpenModelSettings ? (
-							<WelcomeSetupNotice
-								onOpenModelSettings={onOpenModelSettings}
-								onOpenSetup={onOpenSetup}
-							/>
-						) : undefined
-					}
 					onListGitBranches={listGitBranches}
 					onOpenSession={onOpenSessionById}
 					onSwitchGitBranch={switchGitBranch}
-					executionTarget={isCloudSession ? "cloud" : "local"}
-					repoUrl={config.repoUrl ?? ""}
-					cloudBranch={config.branch ?? ""}
-					onRepoUrlChange={handleCloudRepoUrlChange}
-					onCloudBranchChange={handleCloudBranchChange}
-					cloudAgentsEnabled={cloudAgentsEnabled}
 					onWorkInChange={canWorkInWorktree ? setWorkIn : undefined}
 					workIn={workIn}
 				/>

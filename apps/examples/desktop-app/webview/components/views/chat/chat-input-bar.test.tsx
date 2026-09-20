@@ -190,6 +190,7 @@ async function renderVoiceComposer({
 	promptVersion = 0,
 	status = "idle",
 	readOnly = false,
+	piSelectionOnly = false,
 	executionTarget,
 	onAttachFiles = vi.fn(),
 }: {
@@ -203,6 +204,7 @@ async function renderVoiceComposer({
 	promptVersion?: number;
 	status?: ChatSessionStatus;
 	readOnly?: boolean;
+	piSelectionOnly?: boolean;
 	executionTarget?: "cloud" | "local";
 	onAttachFiles?: Parameters<typeof ChatInputBar>[0]["onAttachFiles"];
 } = {}) {
@@ -210,6 +212,7 @@ async function renderVoiceComposer({
 		root.render(
 			<WorkspaceProvider value={workspaceValue}>
 				<ChatInputBar
+					piSelectionOnly={piSelectionOnly}
 					readOnly={readOnly}
 					executionTarget={executionTarget}
 					attachments={attachments}
@@ -249,6 +252,35 @@ async function renderVoiceComposer({
 }
 
 describe("ChatInputBar", () => {
+	it("keeps Pi selection drafts out of the Cline runtime", async () => {
+		const onSend = vi.fn();
+		await renderVoiceComposer({
+			piSelectionOnly: true,
+			prompt: "hello pi",
+			onSend,
+		});
+		const sendButton = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Send message"]',
+		);
+		expect(sendButton?.disabled).toBe(true);
+		expect(container.textContent).toContain(
+			"chat execution is not connected yet",
+		);
+		expect(
+			container.querySelector('[aria-label^="Pi provider:"]'),
+		).not.toBeNull();
+		await act(async () => {
+			sendButton?.click();
+			container
+				.querySelector("textarea")
+				?.dispatchEvent(
+					new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+				);
+		});
+		expect(onSend).not.toHaveBeenCalled();
+		expect(container.querySelector("textarea")?.value).toBe("hello pi");
+	});
+
 	it("prevents sending from a read-only session", async () => {
 		const onSend = vi.fn();
 		await renderVoiceComposer({ prompt: "Test", readOnly: true, onSend });
@@ -1064,7 +1096,7 @@ describe("ChatInputBar", () => {
 		],
 		[
 			new DOMException("Permission denied", "NotAllowedError"),
-			"Check the microphone permission for Cline and try again.",
+			"Check the microphone permission for Pi Agent and try again.",
 		],
 	])("shows speech failures in chat with a configured model: %s", async (error, description) => {
 		loadProviderModelCatalogMock.mockResolvedValue(
@@ -1546,7 +1578,10 @@ describe("ChatInputBar", () => {
 		});
 	});
 
-	it.each(["local", "cloud"] as const)("shows %s queued prompts in an accessible list with clear priority actions", async (executionTarget) => {
+	it.each([
+		"local",
+		"cloud",
+	] as const)("shows %s queued prompts in an accessible list with clear priority actions", async (executionTarget) => {
 		const onSteerPromptInQueue = vi
 			.fn()
 			.mockRejectedValue(new Error("steer failed"));

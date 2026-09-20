@@ -41,6 +41,8 @@
 		"@cline/llms": "workspace:*",
 		"@cline/shared": "workspace:*",
 		"@cline/ui": "workspace:*",
+		"@earendil-works/pi-ai": "0.85.1",
+		"@earendil-works/pi-coding-agent": "0.85.1",
 		"@fontsource-variable/geist-mono": "^5.2.8",
 		"@fontsource-variable/inter": "^5.2.8",
 		"@hookform/resolvers": "^3.9.1",

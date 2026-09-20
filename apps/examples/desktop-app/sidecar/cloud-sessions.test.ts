@@ -484,55 +484,31 @@ describe("Cloud sessions sidecar wiring", () => {
 		).toBe(true);
 	});
 
-	it("creates a canonical session with the requested branch and approval policy", async () => {
-		const create = vi.fn(async () => ({
-			sessionId: "ses-created",
-			status: "ready",
-			sandboxUrl: "pod",
-		}));
-		const { ctx, hub, manager } = createFixture({
+	it("rejects new Cline Cloud sessions in the account-free desktop", async () => {
+		const create = vi.fn();
+		const { ctx, hub } = createFixture({
 			hub: new FakeHubClient(false),
-			api: {
-				list: async () => [],
-				create,
-			} as unknown as CloudSessionApi,
+			api: { list: async () => [], create } as unknown as CloudSessionApi,
 		});
-
-		const created = await handleChatSessionCommand(ctx, {
-			action: "start",
-			prompt: "Fix the provisioning flow",
-			config: {
-				executionTarget: "cloud",
-				repoUrl: "https://github.com/cline/test",
-				model: "anthropic/claude-sonnet-5",
-				sessionId: "client-planned-id",
-				branch: "feature/login-fix",
-				autoApproveTools: false,
-			},
-		});
-
-		expect(created).toMatchObject({
-			sessionId: "ses-created",
-			origin: "cloud",
-		});
-		expect(ctx.liveSessions.has("client-planned-id")).toBe(false);
-		expect(ctx.liveSessions.has("ses-created")).toBe(true);
-		expect(create).toHaveBeenCalledExactlyOnceWith(
-			expect.objectContaining({
-				repoUrl: "https://github.com/cline/test",
-				modelId: "anthropic/claude-sonnet-5",
-				initialPrompt: "Fix the provisioning flow",
-				branch: "feature/login-fix",
-				autoApproveTools: false,
+		// Old preferences/environment overrides must not restore cloud login.
+		process.env.CLINE_CODE_CLOUD_AGENTS = "1";
+		await expect(
+			handleChatSessionCommand(ctx, {
+				action: "start",
+				prompt: "Fix the provisioning flow",
+				config: {
+					executionTarget: "cloud",
+					repoUrl: "https://github.com/cline/test",
+					model: "anthropic/claude-sonnet-5",
+					sessionId: "client-planned-id",
+				},
 			}),
-		);
-		await manager.send("ses-created", "Fix the provisioning flow");
-		const innerCreate = hub.commands.find(
-			(entry) => entry.command === "session.create",
-		);
-		expect(innerCreate?.payload?.toolPolicies).toEqual({
-			"*": { autoApprove: false },
-		});
+		).rejects.toThrow("Cloud sessions are not enabled");
+		expect(create).not.toHaveBeenCalled();
+		expect(ctx.liveSessions.has("client-planned-id")).toBe(false);
+		expect(
+			hub.commands.some((entry) => entry.command === "session.create"),
+		).toBe(false);
 	});
 
 	it("returns the real id immediately and sends only after readiness", async () => {

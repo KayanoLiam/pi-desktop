@@ -132,14 +132,8 @@ describe("resolveCredentialFailureHint", () => {
 		expect(resolveCredentialFailureHint("opencode")).toMatch(/`opencode` CLI/);
 	});
 
-	it("points Cline at signing in again from Settings → Account", () => {
-		expect(resolveCredentialFailureHint("cline")).toBe(
-			"Sign in to Cline again in Settings → Account, then try again.",
-		);
-	});
-
-	it("points everything else at Settings → API Providers", () => {
-		for (const providerId of ["anthropic", "openai-codex", ""]) {
+	it("points every other provider at Settings → API Providers", () => {
+		for (const providerId of ["cline", "anthropic", "openai-codex", ""]) {
 			expect(resolveCredentialFailureHint(providerId)).toMatch(
 				/Settings → API Providers/,
 			);
@@ -152,10 +146,10 @@ describe("resolveCredentialFailureAction", () => {
 		expect(resolveCredentialFailureAction("claude-code")).toBeNull();
 	});
 
-	it("sends Cline to the Account page and other providers to Models", () => {
+	it("sends every provider, including legacy cline, to Models", () => {
 		expect(resolveCredentialFailureAction("cline")).toEqual({
-			label: "Sign in to Cline",
-			target: "account",
+			label: "Open API providers",
+			target: "models",
 		});
 		expect(resolveCredentialFailureAction("anthropic")).toEqual({
 			label: "Open API providers",

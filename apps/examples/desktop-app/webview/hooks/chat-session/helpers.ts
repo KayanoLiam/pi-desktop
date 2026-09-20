@@ -258,10 +258,7 @@ export function resolveCredentialFailureHint(providerId: string): string {
 	if (cli) {
 		return `Sign in again with the \`${cli.command}\` CLI in a terminal, then try again.`;
 	}
-	if (normalizeProviderId(providerId) === "cline") {
-		return "Sign in to Cline again in Settings → Account, then try again.";
-	}
-	return "Check your model connection in Settings → API Providers (or sign in with Cline), then try again.";
+	return "Check your model connection in Settings → API Providers, then try again.";
 }
 
 /**
@@ -279,9 +276,8 @@ export function isCredentialFailure(description: string): boolean {
 /**
  * The in-app action that fixes a credential failure for `providerId`, or null
  * when there is none to offer (local-auth providers are fixed in their CLI).
- * Cline goes to the Account page: Settings → API Providers keeps reporting a
- * stale OAuth token as "signed in", while the Account page verifies it against
- * the API and offers to sign in again.
+ * The Pi desktop has no account page; every provider is fixed from Settings →
+ * API Providers.
  */
 export function resolveCredentialFailureAction(
 	providerId: string,
@@ -289,9 +285,7 @@ export function resolveCredentialFailureAction(
 	if (resolveProviderLocalCli(providerId)) {
 		return null;
 	}
-	return normalizeProviderId(providerId) === "cline"
-		? { label: "Sign in to Cline", target: "account" }
-		: { label: "Open API providers", target: "models" };
+	return { label: "Open API providers", target: "models" };
 }
 
 /** Message meta that makes the chat render the credential fix action. */
