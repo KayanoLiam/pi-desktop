@@ -48,13 +48,13 @@
     ${EndIf}
 
   failed:
-    DetailPrint "Could not stop Cline processes in $INSTDIR (Restart Manager error $0)."
+    DetailPrint "Could not stop Pi processes in $INSTDIR (Restart Manager error $0)."
     ; Tauri's updater runs the installer passive (/P): the user who clicked
     ; "Restart now" is watching, and NSIS's own write-failure dialog would
     ; have shown in that mode anyway, so offer a retry. Silent (/S) takes
     ; the default and fails closed. Aborting rather than continuing keeps
     ; the install from ending half-replaced.
-    MessageBox MB_RETRYCANCEL|MB_ICONSTOP "Could not stop Cline processes using files in:$\r$\n$INSTDIR$\r$\n$\r$\nClose Cline and its background tasks, then retry. Windows error: $0." /SD IDCANCEL IDRETRY retry
+    MessageBox MB_RETRYCANCEL|MB_ICONSTOP "Could not stop Pi processes using files in:$\r$\n$INSTDIR$\r$\n$\r$\nClose Pi and its background tasks, then retry. Windows error: $0." /SD IDCANCEL IDRETRY retry
     Pop $4
     Pop $3
     Pop $2

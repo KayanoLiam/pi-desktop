@@ -15,7 +15,7 @@
   <a href="https://github.com/KayanoLiam/pi-desktop/issues">Issues</a>
 </p>
 
-![Pi Agent running in a native macOS window, with a local workspace and provider, model, and thinking selectors.](docs/images/pi-desktop.png)
+![Pi running in a native macOS window, with a local workspace and provider, model, and thinking selectors.](docs/images/pi-desktop.png)
 
 > **Early preview — chat runs through your installed Pi CLI.**
 > New local threads execute through `pi --mode rpc`: streaming answers,
@@ -25,7 +25,7 @@
 
 ## What works today
 
-- **A native window.** Tauri 2 wraps a Next.js interface and a Bun backend. The app opens as **Pi Agent**, not a browser tab.
+- **A native window.** Tauri 2 wraps a Next.js interface and a Bun backend. The app opens as **Pi**, not a browser tab.
 - **Chat through Pi.** Each active thread is a `pi --mode rpc` process started from the thread's workspace with the picked provider, model and thinking level. Assistant text and thinking stream live; `bash`, `read`, `edit`, `write`, `grep` and extension tools show as tool cards with live output; token usage and cost come from Pi.
 - **Tool approvals, opt-in.** Tools run without asking by default, like the Pi CLI. Flip the composer's shield to **Ask first** and every tool call waits for your approval; the switch works mid-session.
 - **Extension dialogs.** When an installed Pi extension asks a question (`select`, `input`, `confirm`, `editor`), it appears as a question card in the chat; notifications land in the transcript log.

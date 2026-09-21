@@ -1063,7 +1063,7 @@ function GeneralSettingsContent({
 					<div className="flex flex-col gap-1">
 						<p className="text-base font-semibold text-foreground">App icon</p>
 						<p className="text-sm text-muted-foreground">
-							Pick the icon Pi Agent shows in the {appIconLocation}.
+							Pick the icon Pi shows in the {appIconLocation}.
 						</p>
 						{appIconError ? (
 							<p className="mt-2 text-xs text-destructive" role="alert">

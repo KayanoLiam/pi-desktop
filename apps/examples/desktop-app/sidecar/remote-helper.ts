@@ -7,7 +7,7 @@ import {
 
 // Tauri's Linux bundles (deb, rpm, AppImage) install binaries under `usr/bin`
 // and resources under `usr/lib/<productName>`. The product name differs per
-// release channel ("Cline", "Cline Beta"), so scan the sibling lib directory.
+// release channel ("Pi", "Pi Beta"), so scan the sibling lib directory.
 function linuxResourceCandidates(
 	executableDirectory: string,
 	relativePath: string,

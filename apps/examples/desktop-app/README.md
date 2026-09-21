@@ -1,6 +1,6 @@
 # Pi Desktop — Development Guide
 
-The native **Pi Agent** app: a Tauri shell, Bun sidecar, and Next.js webview.
+The native **Pi** app: a Tauri shell, Bun sidecar, and Next.js webview.
 Start with the [project README](../../../README.md) for the screenshot, current
 features, prerequisites, and migration roadmap.
 
@@ -25,7 +25,7 @@ previous `dev:headless` / `dev:web` process first so port 3125 is free. The firs
 launch builds Rust, the sidecar, and SSH helpers and may download build tools.
 
 `bun run dev:headless` is only a browser/sidecar debugging mode; it does **not**
-open the desktop App. An installed `/Applications/Cline.app` is also separate
+open the desktop App. An installed `/Applications/Pi.app` (or `Cline.app`) is also separate
 from this source checkout and will not pick up these changes.
 
 ## No Cline account required
@@ -139,7 +139,7 @@ If Pi cannot be launched, exact authenticated references are still listed with
 not a guarantee that a request would succeed.
 
 The sidebar, welcome screen, window title, and app/Dock icons use the supplied
-Pi logo and Pi Agent branding (the Settings → App icon variants are the Pi mark
+Pi logo and Pi branding (the Settings → App icon variants are the Pi mark
 on light, paper, dark, and coral backgrounds).
 Both light and dark themes remain available, including existing saved dark
 preferences and OS theme detection. The light layout follows the reference;

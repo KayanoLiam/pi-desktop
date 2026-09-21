@@ -1,6 +1,6 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Cline Nightly",
+	"productName": "Pi Nightly",
 	"identifier": "bot.cline.app.nightly",
 	"plugins": {
 		"updater": {

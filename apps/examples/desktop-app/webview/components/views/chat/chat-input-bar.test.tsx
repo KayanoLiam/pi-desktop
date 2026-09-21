@@ -1222,7 +1222,7 @@ describe("ChatInputBar", () => {
 		],
 		[
 			new DOMException("Permission denied", "NotAllowedError"),
-			"Check the microphone permission for Pi Agent and try again.",
+			"Check the microphone permission for Pi and try again.",
 		],
 	])("shows speech failures in chat with a configured model: %s", async (error, description) => {
 		loadProviderModelCatalogMock.mockResolvedValue(

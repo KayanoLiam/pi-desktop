@@ -167,7 +167,7 @@ export async function checkForUpdateAndNotify(): Promise<void> {
 		default:
 			toast({
 				title: "You're up to date",
-				description: "You're already running the latest version of Pi Agent.",
+				description: "You're already running the latest version of Pi.",
 			});
 	}
 }

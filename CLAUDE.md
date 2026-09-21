@@ -8,7 +8,7 @@ This is a fork of the **Cline** monorepo (`origin` → cline/cline) being turned
 
 **Where the migration stands (see the two most recent commits and both READMEs):**
 
-- Step 1 is done, `434030dc6 feat(desktop): migrate desktop example to Pi Agent (step 1: model selection)`: new local threads pick a Pi provider → model → thinking level from the user's real Pi configuration; Cline login/onboarding/account/cloud were removed; Pi Agent branding and a light-by-default theme were applied. `6b5334541 docs: introduce Pi Desktop` rewrote the READMEs around this.
+- Step 1 is done, `434030dc6 feat(desktop): migrate desktop example to Pi Agent (step 1: model selection)`: new local threads pick a Pi provider → model → thinking level from the user's real Pi configuration; Cline login/onboarding/account/cloud were removed; Pi branding and a light-by-default theme were applied. `6b5334541 docs: introduce Pi Desktop` rewrote the READMEs around this.
 - **Nothing executes through Pi yet.** Sending is deliberately disabled for new local Pi threads (`piSelectionOnly` in the composer). Existing Cline sessions and SSH remote environments still run through the inherited Cline runtime (`@cline/core` Hub).
 - Next milestones, in README order: connect local threads to Pi execution (streaming, tools, approvals, cancellation); bring Pi session history and extension workflows in; replace or extract the remaining Cline workspace/runtime dependencies; migrate identifiers, updater, signing and release automation; resolve inherited test/type/lint failures and set up desktop CI.
 - The desktop still depends on `@cline/core`, `@cline/llms`, `@cline/shared`, `@cline/ui` from `sdk/packages/`. Copying only the desktop directory does not build. `apps/cli`, `apps/vscode`, `apps/cline-hub` and the other `apps/examples/*` are retained upstream projects, not the focus.
@@ -45,13 +45,13 @@ bun install --frozen-lockfile
 bun run build:sdk
 
 cd apps/examples/desktop-app
-bun run dev            # native Tauri window ("Pi Agent Dev"); builds sidecar binary + SSH helpers, starts Next.js
+bun run dev            # native Tauri window ("Pi Dev"); builds sidecar binary + SSH helpers, starts Next.js
 bun run dev:headless   # sidecar + Next.js in a browser with a fresh shared approval credential; no native window
 bun run dev:web        # Next.js only,  http://localhost:3125
 bun run dev:sidecar    # sidecar only,  ws://127.0.0.1:3126/transport
 ```
 
-Ports 3125/3126 must be free; stop earlier `dev:*` processes first. An installed `Cline.app` / `Pi Agent.app` is unrelated to this checkout. `bun run code` at the repo root is the same as `bun run dev` here.
+Ports 3125/3126 must be free; stop earlier `dev:*` processes first. An installed `Cline.app` / `Pi.app` is unrelated to this checkout. `bun run code` at the repo root is the same as `bun run dev` here.
 
 ### Verify
 

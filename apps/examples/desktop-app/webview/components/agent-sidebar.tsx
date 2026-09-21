@@ -819,7 +819,7 @@ export function AgentSidebar({
 						>
 							<HoverCardTrigger asChild>
 								<button
-									aria-label="Pi Agent home"
+									aria-label="Pi home"
 									className={cn(
 										"flex size-8 shrink-0 items-center justify-center rounded-md text-sidebar-foreground hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 										isCollapsed && "size-9",
@@ -873,7 +873,7 @@ export function AgentSidebar({
 						</HoverCard>
 						{!isCollapsed ? (
 							<span className="ml-1 text-sm font-semibold tracking-tight">
-								Pi Agent
+								Pi
 							</span>
 						) : null}
 						{!isCollapsed && isBetaVersion(appVersion) ? (

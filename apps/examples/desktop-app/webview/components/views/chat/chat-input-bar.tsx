@@ -1017,7 +1017,7 @@ function ChatInputBarImpl({
 			variant: "destructive",
 			title: "Speech input failed",
 			description: isMicrophoneError
-				? "Check the microphone permission for Pi Agent and try again."
+				? "Check the microphone permission for Pi and try again."
 				: message,
 		});
 	}, []);

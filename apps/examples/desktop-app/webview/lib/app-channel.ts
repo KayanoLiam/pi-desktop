@@ -9,8 +9,8 @@
  * See apps/examples/desktop-app/EXPERIMENTAL.md for the channel model.
  */
 
-export const STABLE_PRODUCT_NAME = "Pi Agent";
-export const BETA_PRODUCT_NAME = "Pi Agent Beta";
+export const STABLE_PRODUCT_NAME = "Pi";
+export const BETA_PRODUCT_NAME = "Pi Beta";
 
 export function isBetaVersion(version: string | null | undefined): boolean {
 	return typeof version === "string" && version.includes("-beta");

@@ -109,7 +109,7 @@ export function NotificationSettings() {
 						Desktop notifications
 					</p>
 					<p className="text-sm text-muted-foreground">
-						Notify only while the Pi Agent window is in the background. Clicking a
+						Notify only while the Pi window is in the background. Clicking a
 						notification opens its session.
 					</p>
 					{permission === "denied" ? (

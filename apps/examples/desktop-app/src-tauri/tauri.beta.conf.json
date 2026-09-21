@@ -1,6 +1,6 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Cline Beta",
+	"productName": "Pi Beta",
 	"identifier": "bot.cline.app.beta",
 	"plugins": {
 		"updater": {

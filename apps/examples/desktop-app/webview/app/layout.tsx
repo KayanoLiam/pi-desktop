@@ -7,7 +7,7 @@ import { HUB_THEME_BOOTSTRAP_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
-	title: "Pi Agent",
+	title: "Pi",
 	description: "Build, debug, and explore your code with Pi.",
 	icons: { icon: "/pi-logo-source.png", apple: "/pi-logo-source.png" },
 };
