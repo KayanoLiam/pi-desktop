@@ -1,8 +1,17 @@
-# Desktop App Example
+# Pi Desktop — Development Guide
 
-Tauri desktop shell + Bun sidecar backend + a Next.js webview, being migrated from Cline to Pi.
+The native **Pi Agent** app: a Tauri shell, Bun sidecar, and Next.js webview.
+Start with the [project README](../../../README.md) for the screenshot, current
+features, prerequisites, and migration roadmap.
 
-## Run the desktop App
+> **Selection preview:** new local Pi threads cannot send messages yet. Existing
+> Cline sessions and SSH environments retain their legacy execution paths. The
+> workspace packages and release infrastructure have not been fully migrated.
+
+## Run the desktop app
+
+Complete the [root setup steps](../../../README.md#run-locally), including
+`bun install --frozen-lockfile` and `bun run build:sdk`, before running:
 
 ```sh
 cd apps/examples/desktop-app
@@ -26,8 +35,9 @@ have been removed from this desktop. Legacy account IPC and Cline OAuth login
 requests are rejected before credentials are read or a browser is opened.
 Cline Cloud is disabled, including old opt-ins and environment overrides, because
 it depends on that account system. Existing credential files and history are
-not deleted. Third-party provider authentication is separate from Cline login;
-Pi authentication and execution are still a later migration step.
+not deleted. Third-party provider authentication is separate from Cline login.
+Configure Pi providers in Pi itself; native Pi login flows and chat execution
+are not connected to this desktop yet.
 
 ## Pi model selection preview
 
@@ -47,16 +57,26 @@ whole built-in catalog, and applies `enabledModels` using Pi's provider-qualifie
 and wildcard scope rules. Saved Pi startup defaults are used only when the
 desktop has no remembered selection. Use **Refresh Pi models** after changing Pi.
 
-This is read-only and offline: no credential refresh, config/cache writes,
-API-key commands, or inference. Secrets never cross the webview bridge.
+The built-in catalog path uses read-only credential/cache adapters with model
+networking disabled: no credential refresh, config/cache writes, API-key command
+execution, or inference requests. Credentials are not included in the catalog
+sent to the webview.
+
 Providers registered by installed Pi extensions (for example Antigravity) are
-not part of the bundled SDK, so when `enabledModels` references one, the sidecar
-asks the installed `pi` CLI (`pi --mode rpc`, offline, no session, no tools) for
-its available models and takes the extension's real model names and
-thinking-level maps from there. Set `PI_DESKTOP_PI_BIN` to point at a specific
-Pi binary. If Pi cannot be launched, exact authenticated references are still
-listed with **unknown** thinking levels rather than guessed ones. Listed
-credentials are not a guarantee that a request would succeed.
+not part of the bundled SDK. When `enabledModels` references one, the sidecar
+asks the installed `pi` CLI for its available models and takes the extension's
+real model names and thinking-level maps from there. Set `PI_DESKTOP_PI_BIN` to
+point at a specific Pi binary.
+
+**Extension discovery executes installed extension code.** Pi is launched in RPC
+mode with `PI_OFFLINE=1`, no session, no tools, and no project context files, but
+these settings are not a sandbox. They cannot guarantee that extension code
+will avoid network access, filesystem writes, or other side effects. Only use
+trusted extensions; the built-in read-only guarantees do not cover them.
+
+If Pi cannot be launched, exact authenticated references are still listed with
+**unknown** thinking levels rather than guessed ones. Listed credentials are
+not a guarantee that a request would succeed.
 
 The sidebar, welcome screen, window title, and app/Dock icons use the supplied
 Pi logo and Pi Agent branding (the Settings → App icon variants are the Pi mark
@@ -84,11 +104,60 @@ From `apps/examples/desktop-app/`:
 - `bun run build:sidecar:bin` - compile the Bun sidecar into a local binary
 - `bun run build:binary` - build desktop binary
 - `bun run package:desktop` - package the current OS desktop app into `dist/desktop/`
-- `bun run typecheck` - TypeScript check
+- `bun run typecheck` - sidecar/dev TypeScript check (not the webview check)
+
+### Verification
+
+After building the SDK from the repository root, run these from this directory:
+
+```sh
+# Pi catalog, selection persistence, picker, and theme
+PI_DESKTOP_PI_BIN=/nonexistent-pi-test bun x vitest run \
+  sidecar/pi-model-catalog.test.ts \
+  sidecar/commands-pi-model-catalog.test.ts \
+  webview/lib/pi-model-selection.test.ts \
+  webview/components/views/chat/pi-model-selector.test.tsx \
+  webview/lib/theme.test.ts \
+  --config vitest.config.ts
+
+# Keep Vitest and Bun-only suites in their respective runners
+PI_DESKTOP_PI_BIN=/nonexistent-pi-test bun x vitest run \
+  sidecar webview scripts/telemetry-define-args.test.ts --config vitest.config.ts
+bun test scripts/desktop-startup.test.ts scripts/dmg-background.test.ts \
+  scripts/generate-update-manifest.test.ts
+
+bun run typecheck
+(cd webview && bun x tsc --noEmit)
+bun run build:web
+bun run build:sidecar
+
+(cd src-tauri && cargo test --locked)
+(cd src-tauri && cargo fmt --check)
+(cd src-tauri && cargo clippy --locked --all-targets -- -D warnings)
+```
+
+The nonexistent Pi executable prevents fallback to a developer's real Pi
+installation; catalog tests supply their own temporary configuration and fake
+RPC executable where needed. Do not use personal credentials for test fixtures.
+
+**Known baseline at `434030dc6` (macOS):** the full Vitest run had 1527 passing
+and 3 failing tests: worktree path canonicalization (`/var` vs `/private/var`),
+a timezone-dependent session label, and jsdom's missing `scrollTo`. Webview
+TypeScript reported 107 diagnostics. Biome reported a notification-copy line-wrap
+error and two warnings; Rust formatting and two Clippy redundant-closure checks
+also failed. Focused tests, Bun script tests, Rust tests, and SDK/web/sidecar
+builds passed. These are local results, not passing desktop GitHub CI.
 
 ### Checking webview changes
 
 Run `bun run build:web` from this directory when changing webview imports or shared browser APIs. Type checking and Vitest do not check the production browser bundle: a valid TypeScript import can still pull Node-only modules into a client chunk. Use `@cline/shared/browser` for runtime imports in the webview; the bare `@cline/shared` source alias points to the Node entry point.
+
+## Inherited integrations
+
+The remaining sections document the existing desktop infrastructure, including
+legacy Cline runtime features. They are retained for development reference and
+are not a claim that these features execute through Pi. See the
+[root migration notes](../../../README.md#architecture-and-migration).
 
 ## Pull Requests
 
@@ -149,6 +218,11 @@ bun tauri icon /tmp/app-icon-macos.png -o /tmp/icons-macos && cp /tmp/icons-maco
 ```
 
 ## Customizing the macOS Install Window
+
+> **Not a Pi release workflow yet:** application identifiers, signing/update
+> configuration, and release automation still include upstream Cline values.
+> Do not publish these inherited settings as an independent Pi Desktop release.
+> Use source development until those settings have been migrated and verified.
 
 The drag-to-Applications window is configured by `bundle.macOS.dmg` in
 [`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json). Its artwork comes

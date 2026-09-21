@@ -1,235 +1,128 @@
 <p align="center">
-  <img src="assets/icons/icon.png" width="80" alt="Cline" />
+  <img src="apps/examples/desktop-app/webview/public/pi-logo-source.png" width="80" alt="Pi Desktop logo" />
 </p>
 
-<h1 align="center">Cline</h1>
+<h1 align="center">Pi Desktop</h1>
 
 <p align="center">
-The open source coding agent in your IDE, terminal, & desktop.
+  A native desktop home for Pi Agent.<br />
+  Your Pi configuration. Your models. A workspace of your own.
 </p>
 
-<div align="center">
+<p align="center">
+  <a href="#run-locally">Run locally</a> ·
+  <a href="apps/examples/desktop-app/README.md">Development guide</a> ·
+  <a href="https://github.com/KayanoLiam/pi-desktop/issues">Issues</a>
+</p>
 
-<div align="center">
-<table>
-<tbody>
-<td align="center">
-<a href="https://docs.cline.bot" target="_blank"><strong>Docs</strong></a>
-</td>
-<td align="center">
-<a href="https://discord.gg/cline" target="_blank"><strong>Discord</strong></a>
-</td>
-<td align="center">
-<a href="https://www.reddit.com/r/cline/" target="_blank"><strong>r/cline</strong></a>
-</td>
-<td align="center">
-<a href="https://github.com/cline/cline/discussions/categories/feature-requests?discussions_q=is%3Aopen+category%3A%22Feature+Requests%22+sort%3Atop" target="_blank"><strong>Feature Requests</strong></a>
-</td>
-<td align="center">
-<a href="https://cline.bot/join-us" target="_blank"><strong>Join us!</strong></a>
-</td>
-</tbody>
-</table>
-</div>
+![Pi Agent running in a native macOS window, with a local workspace and provider, model, and thinking selectors.](docs/images/pi-desktop.png)
 
-</div>
+> **Early preview — model selection, not chat execution yet.**
+> The native app and Pi model picker work today. Sending is deliberately disabled
+> for new local Pi threads until the Pi execution runtime is connected.
+> This is an independent desktop project, currently being migrated from Cline.
 
-<br>
+## What works today
 
-<div align="center">
-<table>
-<tr>
-<td align="center" width="50%">
+- **A native window.** Tauri 2 wraps a Next.js interface and a Bun backend. The app opens as **Pi Agent**, not a browser tab.
+- **Your configured Pi models.** Browse providers and models from your local Pi configuration, filtered by `enabledModels`, rather than an unfiltered built-in catalog.
+- **Selections that stay with you.** Each provider remembers its model; each provider/model pair remembers its thinking level. Pi startup defaults seed the picker when no desktop selection is saved.
+- **Model-aware thinking controls.** Available levels come from model capabilities. Unknown extension capabilities are not guessed.
+- **Light and dark themes.** Saved preferences and system appearance are respected, with a coral accent and the Pi mark throughout the app.
+- **A local-first entry screen.** Choose a workspace and see its branch without Cline onboarding or an account sign-in. Cline Cloud is disabled.
 
-### CLI
+The screenshot shows the current native macOS interface, including its selection-preview notice. Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not a claim that Pi execution or extension management is fully integrated.
 
-Run Cline in your terminal.
-Interactive chat or fully headless 
-for CI/CD and scripting.
+## Run locally
 
-```
-npm i -g cline
-```
+### Requirements
 
-<a href="./apps/cli/README.md">Learn more</a>
-<br><br>
+- **Bun 1.3.13** and **Node.js 22 or newer**. Use Bun for dependency installation and scripts.
+- A current stable **Rust** toolchain. The dependency graph requires Rust 1.85 or newer; the complete minimum-version matrix has not been verified.
+- The [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), including Xcode Command Line Tools on macOS.
+- An existing Pi configuration to populate the picker. An installed `pi` CLI is also needed to discover metadata registered by Pi extensions.
 
-</td>
-<td align="center" width="50%">
+```sh
+cd ~/Desktop
+git clone https://github.com/KayanoLiam/pi-desktop.git
+cd pi-desktop
 
-### Desktop App
+bun install --frozen-lockfile
+bun run build:sdk
 
-Cline as a native app for macOS and Windows.
-Run agent sessions in any folder, schedule
-routines, and manage models, plugins, and MCP servers.
-
-<a href="https://cline.bot/desktop">Download for macOS and Windows</a>
-<br><br>
-
-</td>
-</tr>
-<tr>
-<td align="center" width="50%">
-
-### VS Code Extension
-
-AI coding assistant in your editor.
-Create files, run commands, browse the web,
-and use tools with human-in-the-loop approval.
-
-<a href="https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev">Install from VS Marketplace</a>
-<br><br>
-
-</td>
-<td align="center" width="50%">
-
-### JetBrains Plugin
-
-The same Cline experience in IntelliJ IDEA,
-PyCharm, WebStorm, GoLand, and the rest of
-the JetBrains family.
-
-<a href="https://plugins.jetbrains.com/plugin/28247-cline">Install from JetBrains Marketplace</a>
-<br><br>
-
-</td>
-</tr>
-</table>
-</div>
-
-<div align="center">
-<table>
-<tr>
-<td align="center">
-
-### SDK
-
-Build your own AI agents and integrations powered by the same engine that runs the CLI, desktop app, VS Code extension, and JetBrains plugin. Custom tools, multi-agent teams, connectors, scheduled automations, and more.
-
-```
-npm install @cline/sdk
+cd apps/examples/desktop-app
+bun run dev
 ```
 
-<a href="https://docs.cline.bot/cline-sdk/overview">Documentation</a>
-<br><br>
+This launches the **native Tauri app**. Its development webview uses port `3125`; the sidecar uses `3126`. Stop conflicting desktop/headless development processes first. The first launch builds native dependencies, the sidecar, and SSH helpers, and may download build tools.
 
-</td>
-</tr>
-</table>
-</div>
+For browser-only debugging, use `bun run dev:headless` from the app directory. It does **not** open a native window. An older installed Cline app does not reflect this checkout.
 
----
+macOS is the currently exercised native development platform. Inherited Windows/Linux packaging scripts are not a verified Pi Desktop release matrix. Use the source workflow above; signing, updater endpoints, and standalone distribution still need migration.
 
-## Index
+## Bring your Pi configuration
 
-| Product | Description | Location | CHANGELOG |
-|---------|------------|--------------|--------------|
-| **SDK** | Node.js programmatic agent API and extension exports. | [`sdk/`](https://github.com/cline/cline/tree/main/sdk) | [CHANGELOG.md](https://github.com/cline/cline/blob/main/sdk/CHANGELOG.md) |
-| **CLI** | Terminal UI, headless mode, shell commands, and CLI-specific flows. | [`apps/cli/`](https://github.com/cline/cline/tree/main/apps/cli) | [CHANGELOG.md](https://github.com/cline/cline/blob/main/apps/cli/CHANGELOG.md) |
-| **VS Code Extension** | The Marketplace extension and extension host integration. | [`/`](https://github.com/cline/cline/tree/main) (WIP migrating) | [CHANGELOG.md](https://github.com/cline/cline/blob/main/CHANGELOG.md) |
-| **Desktop App** | Native macOS and Windows app (Tauri shell, Bun sidecar, Next.js UI). | [`apps/examples/desktop-app/`](https://github.com/cline/cline/tree/main/apps/examples/desktop-app) | [CHANGELOG.md](https://github.com/cline/cline/blob/main/apps/examples/desktop-app/CHANGELOG.md) |
-| **JetBrains Plugin** | JetBrains-hosted client that talks to the shared agent core. | Currently we are not open-sourcing JetBrains plugins | - |
-| **Docs site** | Public documentation pages. | [`docs/`](https://docs.cline.bot/) | - |
+The catalog reads `~/.pi/agent`, or the directory selected by `PI_CODING_AGENT_DIR`:
 
-## Edits Code Across Your Project
+| File | Used for |
+| --- | --- |
+| `auth.json` | Locally configured provider credentials and availability |
+| `models.json` | Custom providers and models |
+| `models-store.json` | Cached provider model metadata |
+| `settings.json` | `enabledModels`, startup defaults, and thinking preferences |
 
-Cline reads your project structure, understands the relationships between files, and makes coordinated changes across your codebase. It monitors linter and compiler errors as it works, fixing issues like missing imports, type mismatches, and syntax errors before you even see them. In VS Code and JetBrains, every edit shows up as a diff you can review, modify, or revert. All changes are tracked with checkpoints, so you can easily undo the agent's work.
+Configure providers in Pi, then use the picker’s refresh control to reload. Model identity always includes **both provider ID and model ID**, so identical model names from different providers do not share a selection. A listed credential does not prove that a future model request will succeed.
 
-## Runs Bash Commands
+### Extension discovery and trust
 
-Cline executes commands directly in your terminal and watches the output in real time. Install packages, run build scripts, execute tests, deploy applications, manage databases. For long-running processes like dev servers, Cline continues working in the background and reacts to new output as it appears, catching compile errors, test failures, and server crashes as they happen.
+The built-in catalog path uses read-only credential/cache adapters with model networking disabled. It does not request inference, refresh credentials, or execute API-key commands, and credentials are not included in the catalog sent to the webview.
 
-## Plan and Act
+When `enabledModels` references a provider absent from the bundled SDK, the sidecar may launch the installed `pi` CLI in RPC mode to discover that provider’s real models and thinking levels. Set `PI_DESKTOP_PI_BIN` if the executable is not on `PATH` or you want to select a particular installation.
 
-Toggle between Plan mode and Act mode. In Plan mode, Cline explores your codebase, asks clarifying questions, and lays out a strategy. Once you're aligned, switch to Act mode and Cline executes the plan. Every file edit and terminal command requires your approval, so you stay in control of what actually changes. Or toggle auto-approve and let Cline run autonomously.
+**This discovery loads installed Pi extensions.** Pi is launched with `PI_OFFLINE=1`, no session, no tools, and no project context files, but these options are **not a sandbox** for extension code. Do not treat extension discovery as a guarantee of zero network access or filesystem writes. Use only extensions you trust.
 
-## Rules and Skills
+If Pi is unavailable, exact authenticated extension references can remain visible with unknown thinking capabilities; wildcard entries are not invented.
 
-Define project-specific rules in `.clinerules` files that guide how Cline works in your codebase: coding standards, architecture conventions, deployment procedures, testing requirements. Rules are picked up automatically by the CLI, VS Code extension, and JetBrains plugin. Use skills to let the model load specific rules when needed.
+## Architecture and migration
 
-## Works With Every Model
-
-Cline is not locked to a single AI provider. Use whichever model fits your workflow:
-
-| Provider | Models |
-|----------|--------|
-| Anthropic | Claude Opus, Sonnet, Haiku |
-| OpenAI | GPT series models |
-| Google | Gemini series models |
-| OpenRouter | 200+ models from any provider |
-| Vercel AI Gateway | Route to many providers through one gateway |
-| AWS Bedrock | Claude, Llama, and more |
-| Azure / GCP Vertex | All hosted models |
-| Cerebras / Groq | Fast inference models |
-| Ollama / LM Studio | Run local models on your machine |
-| Any OpenAI-compatible API | Self-hosted or third-party endpoints |
-
-## Extend With Plugins or MCP Servers
-
-Extend Cline's capabilities with plugins. Using the SDK, register tools and lifecycle hooks programmatically through the plugin system for logging, auditing, policy enforcement, or adding domain-specific capabilities. Simple plugin example below.
-
-```typescript
-import { Agent, createTool } from "@cline/sdk"
-
-const deployTool = createTool({
-  name: "deploy",
-  description: "Deploy the current branch to staging.",
-  inputSchema: { type: "object", properties: { env: { type: "string" } }, required: ["env"] },
-  execute: async (input) => {
-    // your deployment logic
-  },
-})
-
-const agent = new Agent({ tools: [deployTool], /* ... */ })
-```
-...or use [MCPs](https://github.com/modelcontextprotocol) to connect to databases, query APIs, manage cloud infrastructure, and interact with external systems. Use [community-built servers](https://github.com/modelcontextprotocol/servers) or ask Cline to create custom tools on the fly. In the CLI, manage servers with `cline mcp`.
-
-## Multi-Agent Teams
-
-Coordinate multiple agents working together on complex tasks. A coordinator agent breaks the work into subtasks and delegates to specialist agents, each with their own tools and context. Team state persists across sessions so you can pick up where you left off.
-
-```bash
-cline --team-name auth-sprint "Plan and implement user authentication with tests"
+```text
+Tauri native shell
+        │
+Next.js / React webview
+        │  local transport
+Bun sidecar
+        ├── Pi configuration and model catalog
+        ├── Installed Pi RPC for extension model discovery
+        └── Inherited Cline runtime and workspace services
 ```
 
-## Scheduled Agents
+The goal is a standalone Pi desktop app. **This checkout is not standalone yet:** it retains the Cline monorepo and directly depends on `@cline/core`, `@cline/llms`, `@cline/shared`, and `@cline/ui`. Copying only the desktop directory will not produce a buildable project.
 
-Run agents on cron schedules for recurring automations. Daily PR summaries, weekly dependency checks, codebase health reports. Schedules persist across restarts and run independently of any terminal session.
+| Path | Purpose |
+| --- | --- |
+| [`apps/examples/desktop-app/`](apps/examples/desktop-app/) | Native app, webview, sidecar, and desktop development guide |
+| [`sdk/packages/`](sdk/packages/) | Shared workspace dependencies still required by the desktop |
+| [`docs/images/`](docs/images/) | Screenshots used by this README |
+| Other `apps/` directories | Retained upstream projects; not the focus of Pi Desktop |
 
-```bash
-cline schedule create "PR summary" \
-  --cron "0 9 * * MON-FRI" \
-  --prompt "List all open PRs and their review status" \
-  --workspace /path/to/repo
-```
+Existing Cline sessions and SSH environments retain their legacy execution paths. Removing Cline account screens does not remove those runtime dependencies. Bundle identifiers and updater configuration also still contain Cline values; they must be migrated before distributing an independent release.
 
-## Connect to Slack, Telegram, Discord, and More
+### Next milestones
 
-Chat with your agent from any messaging platform: Telegram, Slack, Discord, Google Chat, WhatsApp, and Linear. Each conversation thread maps to an agent session with full context. Set up access control to restrict who can interact with your agent.
+- Connect local threads to Pi execution, streaming, tools, approvals, and cancellation.
+- Bring Pi session history and extension workflows into the desktop.
+- Replace or extract the remaining Cline workspace/runtime dependencies.
+- Migrate application identifiers, updates, signing, and release automation.
+- Resolve inherited test/type/lint failures and establish desktop CI across supported platforms.
 
-```bash
-# Connect to Telegram
-cline connect telegram -k $BOT_TOKEN
-# Connect to Slack through webhook
-cline connect slack --bot-token $SLACK_TOKEN --signing-secret $SECRET --base-url $URL
-# Connect to Slack using socket mode
-cline connect slack --bot-token $SLACK_TOKEN --app-token $SLACK_APP_TOKEN
-```
+## Development
 
-## Headless CLI for CI/CD
+See the [desktop development guide](apps/examples/desktop-app/README.md) for commands, verification notes, native assets, and inherited runtime details. After SDK changes, rebuild with `bun run build:sdk` before testing or restarting the desktop: workspace packages resolve compiled `dist/` output.
 
-Run Cline with zero interaction for scripting and automation. Pipe input, get JSON output, chain commands, integrate into CI/CD pipelines.
+The current baseline is **not all green**. A successful web build is not a passing webview typecheck, and inherited GitHub workflows are not evidence of Pi Desktop compatibility. Please include exact commands and results when reporting a bug or contributing a change.
 
-```bash
-cline "Run tests and fix any failures"
-git diff origin/main | cline "Review these changes for issues"
-cline --json "List all TODO comments" | jq -r 'select(.type == "agent_event" and .event.text) | .event.text'
-```
+## Acknowledgments and license
 
-## Contributing
+Pi Desktop builds on the [Cline](https://github.com/cline/cline) desktop architecture and the Pi coding-agent packages. Existing upstream code and copyright notices are retained.
 
-Start with the [Contributing Guide](CONTRIBUTING.md). Join our [Discord](https://discord.gg/cline) and head to the `#contributors` channel to connect with other contributors. Check our [careers page](https://cline.bot/join-us) for full-time roles.
-
-## License
-
-[Apache 2.0 © 2026 Cline Bot Inc.](./LICENSE)
+This repository is licensed under [Apache 2.0](LICENSE). Original Cline code © 2026 Cline Bot Inc. Dependencies remain under their respective licenses.
