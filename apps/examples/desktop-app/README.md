@@ -4,9 +4,10 @@ The native **Pi Agent** app: a Tauri shell, Bun sidecar, and Next.js webview.
 Start with the [project README](../../../README.md) for the screenshot, current
 features, prerequisites, and migration roadmap.
 
-> **Selection preview:** new local Pi threads cannot send messages yet. Existing
-> Cline sessions and SSH environments retain their legacy execution paths. The
-> workspace packages and release infrastructure have not been fully migrated.
+> **Pi runs the chat.** New local threads execute through the installed `pi`
+> CLI in RPC mode (see "Pi execution" below). Existing Cline sessions and SSH
+> environments retain their legacy execution paths. The workspace packages and
+> release infrastructure have not been fully migrated.
 
 ## Run the desktop app
 
@@ -36,12 +37,69 @@ requests are rejected before credentials are read or a browser is opened.
 Cline Cloud is disabled, including old opt-ins and environment overrides, because
 it depends on that account system. Existing credential files and history are
 not deleted. Third-party provider authentication is separate from Cline login.
-Configure Pi providers in Pi itself; native Pi login flows and chat execution
-are not connected to this desktop yet.
+Configure Pi providers in Pi itself (`pi auth …`); the desktop has no Pi login
+flow of its own.
 
-## Pi model selection preview
+## Pi execution
 
-New **local** threads now offer Pi's provider → model → thinking picker. Select
+New **local** threads run through the user's installed Pi. `sidecar/pi/` owns
+this path; `sidecar/ARCHITECTURE.md` describes the design. In short:
+
+- `chat_session_command` requests carrying `runtime: "pi"` (or a session id that
+  exists in `~/.pi/agent/sessions`) are routed to `PiSessionManager` instead of
+  the Cline Hub. The manager spawns `pi --mode rpc` from the thread workspace
+  with `--session-id <id>` (new) or `--session <file>` (resume), the picked
+  `--model provider/id` and `--thinking level`, and `--extension <gate>`.
+- The binary is `PI_DESKTOP_PI_BIN` or `pi` on `PATH` (the login-shell `PATH`
+  the sidecar imports at startup). A missing executable fails the send with a
+  clear error rather than hanging.
+- Pi's events are translated into the transport the webview already renders:
+  `chat_text`, `chat_reasoning`, `chat_tool_call_start|update|end`,
+  `chat_usage`, `chat_done`, `chat_queued_prompt_start`, `chat_session_status`,
+  `chat_session_ended`, `prompts_in_queue_state`. A blocking `send` resolves at
+  Pi's `agent_settled` with the same result shape the Cline path returns, so
+  `use-chat-session.ts` is unchanged apart from carrying `runtime`.
+- Pi has no built-in tool approval. The sidecar writes a small `tool_call`
+  hook extension to `~/.cline/data/pi-desktop/extensions/` (content-addressed)
+  and loads it into every Pi process. It asks through `ctx.ui.confirm` with a
+  marker title; the sidecar answers immediately when the thread auto-approves
+  (default, matching the Pi CLI) or shows the approval card when the composer's
+  shield is set to **Ask first**. Rejected calls are blocked with a reason that
+  Pi sends back to the model.
+- Other extension dialogs (`select`, `input`, `editor`, `confirm`) become
+  question cards; `notify` becomes a transcript log entry; `setStatus`,
+  `setWidget`, `setTitle` and `set_editor_text` are ignored.
+- **Stop** sends Pi's `abort`; if Pi does not answer within ten seconds the
+  process is killed. Prompts sent while a turn runs are queued as Pi
+  follow-ups. Idle processes are reaped after ten minutes and relaunched on the
+  session file when needed.
+- Pi session history is read directly from the JSONL files (never through
+  Pi's `SessionManager.open()`, which rewrites old versions). The active branch
+  is projected into the transcript shape: tool calls pair with their results,
+  `edit` diffs render as rich diffs, compactions show as status rows. Rename
+  appends a `session_info` entry (or uses `set_session_name` while live);
+  delete removes the file. Pinning is stored desktop-side in
+  `~/.cline/data/pi-desktop/session-metadata.json`.
+- Slash commands come from Pi (`get_commands`): extension commands, prompt
+  templates and skills, per workspace, cached for five minutes. A stat
+  signature of `settings.json`, `models.json`, `auth.json`, `npm/`, `git/` and
+  `extensions/` is checked on file events and every five seconds; a change
+  marks live Pi processes stale (restarted after their current run), clears
+  the command cache and broadcasts `pi_config_changed`, which reloads the
+  picker and the slash menu.
+
+**Execution runs your installed Pi with your extensions, packages and
+credentials.** RPC mode shows no project-trust prompt; project-local `.pi`
+resources follow Pi's saved trust decisions and `defaultProjectTrust`, and the
+desktop never passes `--approve`. None of this is a sandbox.
+
+Not supported for Pi threads yet: fork, editing an earlier message, file
+checkpoints, editing or removing one queued message (only stop-and-resend), and
+SSH remote environments (they stay on the Cline runtime).
+
+## Pi model selection
+
+New **local** threads offer Pi's provider → model → thinking picker. Select
 a provider, then one of its models, then a thinking level. Models are identified
 by **provider ID + model ID**; choices are remembered separately per provider in
 browser storage, independently of Cline's model settings. Thinking levels are
@@ -55,7 +113,9 @@ The catalog reads the user's Pi agent directory (`~/.pi/agent`, or
 and `settings.json`. It lists configured/available providers rather than the
 whole built-in catalog, and applies `enabledModels` using Pi's provider-qualified
 and wildcard scope rules. Saved Pi startup defaults are used only when the
-desktop has no remembered selection. Use **Refresh Pi models** after changing Pi.
+desktop has no remembered selection; a session opened from history seeds the
+picker with the model it was recorded with. The picker reloads on
+`pi_config_changed`; **Refresh Pi models** forces a reload.
 
 The built-in catalog path uses read-only credential/cache adapters with model
 networking disabled: no credential refresh, config/cache writes, API-key command
@@ -85,10 +145,8 @@ Both light and dark themes remain available, including existing saved dark
 preferences and OS theme detection. The light layout follows the reference;
 there is no forced theme reset.
 
-This is the first migration step, **selection only**. Sending is disabled for new
-local threads until Pi chat execution is connected. Existing local Cline sessions
-and SSH environments keep their previous execution paths; Cline account and
-cloud login flows are no longer available.
+Existing local Cline sessions and SSH environments keep their previous
+execution paths; Cline account and cloud login flows are no longer available.
 
 ## Dev Commands
 
@@ -111,12 +169,16 @@ From `apps/examples/desktop-app/`:
 After building the SDK from the repository root, run these from this directory:
 
 ```sh
-# Pi catalog, selection persistence, picker, and theme
+# Pi execution, session files, command routing, catalog, picker, composer, theme
 PI_DESKTOP_PI_BIN=/nonexistent-pi-test bun x vitest run \
+  sidecar/pi \
+  sidecar/commands-pi-session.test.ts \
   sidecar/pi-model-catalog.test.ts \
   sidecar/commands-pi-model-catalog.test.ts \
   webview/lib/pi-model-selection.test.ts \
   webview/components/views/chat/pi-model-selector.test.tsx \
+  webview/components/views/chat/chat-input-bar.test.tsx \
+  webview/hooks/chat-session/helpers.test.ts \
   webview/lib/theme.test.ts \
   --config vitest.config.ts
 
@@ -137,16 +199,19 @@ bun run build:sidecar
 ```
 
 The nonexistent Pi executable prevents fallback to a developer's real Pi
-installation; catalog tests supply their own temporary configuration and fake
-RPC executable where needed. Do not use personal credentials for test fixtures.
+installation, and `vitest.setup.ts` points `PI_CODING_AGENT_DIR` at an empty
+temporary directory so no suite reads a real `~/.pi/agent`. Pi runtime tests
+drive a scripted fake `pi` (`sidecar/pi/test-helpers/fake-pi.ts`) that speaks
+the JSONL protocol. Do not use personal credentials for test fixtures.
 
-**Known baseline at `434030dc6` (macOS):** the full Vitest run had 1527 passing
-and 3 failing tests: worktree path canonicalization (`/var` vs `/private/var`),
-a timezone-dependent session label, and jsdom's missing `scrollTo`. Webview
-TypeScript reported 107 diagnostics. Biome reported a notification-copy line-wrap
-error and two warnings; Rust formatting and two Clippy redundant-closure checks
-also failed. Focused tests, Bun script tests, Rust tests, and SDK/web/sidecar
-builds passed. These are local results, not passing desktop GitHub CI.
+**Known baseline (macOS, this step):** the full Vitest run had 1568 passing and
+3 failing tests, the same three inherited failures as before: worktree path
+canonicalization (`/var` vs `/private/var`), a timezone-dependent session
+label, and jsdom's missing `scrollTo`. Webview TypeScript reported 107
+diagnostics (unchanged; none in the files touched by the Pi work). Sidecar
+`typecheck`, `build:web`, `build:sidecar` and the Bun script suites passed.
+Biome still reports the inherited findings in untouched files. Rust checks were
+not re-run in this step. These are local results, not passing desktop GitHub CI.
 
 ### Checking webview changes
 
@@ -427,7 +492,9 @@ Desktop transport envelope:
 
 - [`src-tauri/src/main.rs`](./src-tauri/src/main.rs) - Tauri shell lifecycle, backend launch, and native-only commands
 - [`sidecar/index.ts`](./sidecar/index.ts) - persistent Bun sidecar and Hub-daemon entry dispatch
-- [`sidecar/chat-session.ts`](./sidecar/chat-session.ts) - shared-Hub chat session adapter
+- [`sidecar/chat-session.ts`](./sidecar/chat-session.ts) - chat session router (Pi threads → `sidecar/pi/`, else shared Hub)
+- [`sidecar/pi/pi-session-manager.ts`](./sidecar/pi/pi-session-manager.ts) - Pi RPC processes, event translation, approvals
+- [`sidecar/pi/pi-session-files.ts`](./sidecar/pi/pi-session-files.ts) - read-only Pi session history
 - [`webview/lib/desktop-client.ts`](./webview/lib/desktop-client.ts) - typed desktop websocket client
 - [`webview/hooks/use-chat-session.ts`](./webview/hooks/use-chat-session.ts) - UI chat session state + backend subscriptions
 - [`webview/lib/chat-schema.ts`](./webview/lib/chat-schema.ts) - chat message schema used by the UI

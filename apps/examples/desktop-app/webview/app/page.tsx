@@ -36,6 +36,7 @@ import {
 import { ChatInputBar } from "@/components/views/chat/chat-input-bar";
 import { ChatMessages } from "@/components/views/chat/chat-messages";
 import { EnvironmentSelector } from "@/components/views/chat/environment-selector";
+import type { PiModelSelectionValue } from "@/components/views/chat/pi-model-selector";
 import { RemoteDirectoryPicker } from "@/components/views/chat/remote-directory-picker";
 import { WelcomeScreen } from "@/components/views/chat/welcome-chat";
 import type { SettingsSection } from "@/components/views/settings/sections";
@@ -45,6 +46,7 @@ import {
 	WindowTitleBarProvider,
 } from "@/components/window-title-bar";
 import { WorkspaceProvider } from "@/contexts/workspace-context";
+import { getInitialPiRuntimeConfig } from "@/hooks/chat-session/constants";
 import type { ProcessContext } from "@/hooks/chat-session/types";
 import { checkForUpdateAndNotify, useAppUpdate } from "@/hooks/use-app-update";
 import { useChatSession } from "@/hooks/use-chat-session";
@@ -1589,12 +1591,65 @@ function ChatThreadPane({
 	]);
 
 	const isNewThread = startsNewThread(sessionId, messages);
-	// Migrate the local new-thread picker first. Existing Cline, remote, and
-	// cloud sessions retain their original model selection and execution paths.
-	const piSelectionOnly =
-		isNewThread &&
-		!isCloudSession &&
-		environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID;
+	// New local threads run through the installed Pi CLI. Sessions opened from
+	// history keep the runtime they were recorded with (Pi session files vs.
+	// Cline sessions); remote and cloud threads stay on the inherited runtime.
+	const isPiThread = isNewThread
+		? !isCloudSession && environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID
+		: config.runtime === "pi";
+	useEffect(() => {
+		if (!isPiThread || config.runtime === "pi") return;
+		// A fresh thread (first mount, or a reset that re-seeded Cline defaults):
+		// switch the config to Pi with the remembered Pi model selection.
+		setConfig((prev) =>
+			prev.runtime === "pi"
+				? prev
+				: { ...prev, ...getInitialPiRuntimeConfig() },
+		);
+	}, [config.runtime, isPiThread, setConfig]);
+	const handlePiSelectionChange = useCallback(
+		(value: PiModelSelectionValue) =>
+			setConfig((prev) => {
+				const piThinkingLevel = value.thinkingLevel || undefined;
+				if (
+					prev.runtime === "pi" &&
+					prev.provider === value.providerId &&
+					prev.model === value.modelId &&
+					prev.piThinkingLevel === piThinkingLevel
+				) {
+					return prev;
+				}
+				return {
+					...prev,
+					runtime: "pi",
+					provider: value.providerId,
+					model: value.modelId,
+					apiKey: "",
+					piThinkingLevel,
+				};
+			}),
+		[setConfig],
+	);
+	const piSelection = useMemo<PiModelSelectionValue | undefined>(
+		() =>
+			config.runtime === "pi"
+				? {
+						providerId: config.provider,
+						modelId: config.model,
+						thinkingLevel: config.piThinkingLevel ?? "",
+					}
+				: undefined,
+		[config.model, config.piThinkingLevel, config.provider, config.runtime],
+	);
+	const handleAutoApproveToolsChange = useCallback(
+		(autoApproveTools: boolean) =>
+			setConfig((prev) =>
+				prev.autoApproveTools === autoApproveTools
+					? prev
+					: { ...prev, autoApproveTools },
+			),
+		[setConfig],
+	);
 
 	const handleAttachFiles = useCallback(
 		(files: File[]) => {
@@ -1640,7 +1695,6 @@ function ChatThreadPane({
 
 	const handleSend = useCallback(
 		async (prompt: string) => {
-			if (piSelectionOnly) return;
 			const trimmed = prompt.trim();
 			if (!trimmed && pendingAttachments.length === 0) {
 				return;
@@ -1673,7 +1727,6 @@ function ChatThreadPane({
 			isNewThread,
 			onThreadStarted,
 			pendingAttachments,
-			piSelectionOnly,
 			sendPrompt,
 			sessionId,
 			setPendingAttachments,
@@ -2156,7 +2209,7 @@ function ChatThreadPane({
 
 	const isAppReady =
 		chatTransportState === "connected" &&
-		(piSelectionOnly || providersLoaded) &&
+		(isPiThread || providersLoaded) &&
 		workspacesLoaded;
 
 	if (!isAppReady) {
@@ -2181,7 +2234,11 @@ function ChatThreadPane({
 
 	const composer = (
 		<ChatInputBar
-			piSelectionOnly={piSelectionOnly}
+			runtime={isPiThread ? "pi" : "cline"}
+			autoApproveTools={config.autoApproveTools !== false}
+			onAutoApproveToolsChange={handleAutoApproveToolsChange}
+			piSelection={piSelection}
+			onPiSelectionChange={handlePiSelectionChange}
 			readOnly={isCloudSessionExpired}
 			attachments={attachmentList}
 			environmentId={environmentId}
@@ -2289,13 +2346,19 @@ function ChatThreadPane({
 								error={cloudSessionError?.message ?? displayedError}
 								importedFromTool={importedFromTool}
 								messages={displayedMessages}
-								onEditMessage={isCloudSession ? undefined : handleEditMessage}
-								onRestoreCheckpoint={
-									isCloudSession ? undefined : handleRestoreCheckpoint
+								onEditMessage={
+									isCloudSession || isPiThread ? undefined : handleEditMessage
 								}
-								onForkSession={isCloudSession ? undefined : handleForkSession}
+								onRestoreCheckpoint={
+									isCloudSession || isPiThread
+										? undefined
+										: handleRestoreCheckpoint
+								}
+								onForkSession={
+									isCloudSession || isPiThread ? undefined : handleForkSession
+								}
 								onProceedWhileRunning={
-									isCloudSession ? undefined : proceedWhileRunning
+									isCloudSession || isPiThread ? undefined : proceedWhileRunning
 								}
 								startingLabel={
 									isProvisioningCloudSession

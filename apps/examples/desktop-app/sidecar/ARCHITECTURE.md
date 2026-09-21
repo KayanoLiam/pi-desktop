@@ -3,7 +3,8 @@
 ## Overview
 
 The sidecar is a Bun process that adapts the desktop UI and native operations to
-the shared Cline Hub.
+two execution runtimes: the user's installed **Pi CLI** (new local threads) and
+the inherited shared **Cline Hub** (existing Cline sessions, SSH environments).
 
 It imports `@cline/core`, discovers or starts the canonical shared Hub, registers
 as a Hub client, and serves the Next.js frontend over HTTP + WebSocket. The
@@ -18,7 +19,14 @@ sidecar/
 ├── context.ts            # SidecarContext type and factory
 ├── client-context.ts     # Desktop client/account identity for shared telemetry
 ├── commands.ts           # Command router
-├── chat-session.ts       # Shared-Hub chat session adapter (local + cloud routing)
+├── chat-session.ts       # Chat session router (Pi threads → pi/, else shared Hub / cloud)
+├── pi/                   # Pi execution runtime
+│   ├── pi-rpc-process.ts          # `pi --mode rpc` JSONL client (spawn, request ids, events)
+│   ├── pi-session-manager.ts      # One Pi process per active thread; Pi events → desktop events
+│   ├── pi-session-files.ts        # Read-only ~/.pi/agent/sessions parsing + transcript projection
+│   ├── pi-session-metadata.ts     # Desktop-only annotations (pinned) for Pi sessions
+│   ├── pi-desktop-gate-extension.ts # Generated tool_call hook that routes approvals to the desktop
+│   └── pi-config-watcher.ts       # Follows Pi CLI installs/settings edits → pi_config_changed
 ├── cloud-sessions.ts     # Cloud session REST client + Hub-proxy manager
 ├── cline-auth.ts         # Refresh-aware Cline auth token resolution
 ├── desktop-settings.ts   # Desktop-owned settings (cloud sessions opt-in)
@@ -38,6 +46,42 @@ Event:    { "type": "event", "event": { "name": string, "payload": unknown } }
 ```
 
 ## Key Design Decisions
+
+### 0. Pi Threads — One `pi --mode rpc` Process per Session
+
+`handleChatSessionCommand` routes a request to `PiSessionManager` when the
+config says `runtime: "pi"` or the session id belongs to a Pi session on disk
+(local environment only). The manager spawns the installed `pi`
+(`PI_DESKTOP_PI_BIN` or `PATH`) with `--session-id <id>` (new) or
+`--session <file>` (resume), `--model provider/id --thinking level`, and
+`--extension <gate>`; the working directory is the thread workspace. Pi loads
+the user's real extensions, packages and credentials, so this is not a sandbox.
+
+Pi events are translated into the same transport the webview already consumes
+for Cline sessions (`chat_text`, `chat_reasoning`, `chat_tool_call_*`,
+`chat_usage`, `chat_done`, `chat_queued_prompt_start`, `chat_session_status`,
+`chat_session_ended`, `prompts_in_queue_state`). A blocking `send` resolves at
+`agent_settled` with the same result shape as the Cline path.
+
+Tool approvals: Pi has no built-in approval, so the sidecar writes a small
+`tool_call` hook extension (`~/.cline/data/pi-desktop/extensions/`) that asks
+through `ctx.ui.confirm("pi-desktop:tool-approval", <json>)`. In RPC mode that
+arrives as `extension_ui_request`; the sidecar auto-confirms when the thread
+auto-approves (default) or registers a pending approval in `ctx.pendingApprovals`
+and answers with `extension_ui_response` once the webview responds. Other
+extension dialogs (`select`/`input`/`editor`/`confirm`) become
+`ask_question_requested` items; `notify` becomes a `chat_core_log` entry.
+
+Session history comes from Pi's own files: `pi-session-files.ts` parses the
+JSONL tree read-only (never through `SessionManager.open()`, which rewrites old
+versions), projects the active branch into `ChatMessage` rows, appends
+`session_info` for renames, and deletes files on request. Idle processes are
+reaped after 10 minutes and recreated transparently on the next send.
+
+`pi-config-watcher.ts` compares a stat signature of `settings.json`,
+`models.json`, `auth.json`, `npm/`, `git/` and `extensions/`; on change it marks
+live processes stale (restart after their run), clears the slash-command cache,
+and broadcasts `pi_config_changed` so the webview reloads its catalog.
 
 ### 1. Chat Sessions — Shared Hub Client
 
@@ -167,7 +211,9 @@ Supported commands:
 
 | Command | Implementation |
 |---------|---------------|
-| `chat_session_command` | shared Hub through `ClineCore`; cloud sessions route to `CloudSessionManager` |
+| `chat_session_command` | Pi threads → `PiSessionManager`; else shared Hub through `ClineCore`; cloud sessions route to `CloudSessionManager` |
+| `list_pi_model_catalog` | `listPiModelCatalog()` (Pi config + installed-Pi RPC discovery) |
+| `list_pi_commands` | `PiSessionManager.listCommands()` (`get_commands` from the live or a discovery Pi process) |
 | `list_provider_catalog` | `ProviderSettingsManager` + `listLocalProviders` |
 | `list_provider_models` | `getLocalProviderModels` |
 | `save_voice_input_settings` | validates and persists the selected transcription provider/model |
@@ -177,11 +223,11 @@ Supported commands:
 | `add_provider` | `addLocalProvider` |
 | `run_provider_oauth_login` | `loginLocalProvider` |
 | `list_chat_sessions` | `SqliteSessionStore` + file discovery, merged with cloud sessions |
-| `list_discovered_sessions` | Merged discovery (local + cloud) |
-| `read_session_messages` | Session data readers; cloud sessions read through the sandbox Hub |
+| `list_discovered_sessions` | Merged discovery (Pi session files + local + cloud) |
+| `read_session_messages` | Pi sessions from `~/.pi/agent/sessions`; else session data readers; cloud sessions read through the sandbox Hub |
 | `read_session_hooks` | Session data readers |
-| `delete_chat_session` | `SqliteSessionStore.delete` + file cleanup; cloud sessions also delete the sandbox |
-| `update_chat_session_title` | `resolveSessionBackend().updateSession`; cloud sessions PATCH the cloud API |
+| `delete_chat_session` | Pi sessions delete the `.jsonl`; else `SqliteSessionStore.delete` + file cleanup; cloud sessions also delete the sandbox |
+| `update_chat_session_title` | Pi sessions append `session_info` (or `set_session_name` when live); else `resolveSessionBackend().updateSession`; cloud sessions PATCH the cloud API |
 | `get_feature_flags` | `isCloudAgentsEnabled()` (env override + settings toggle) |
 | `get_desktop_settings` | `readDesktopSettings()` |
 | `set_cloud_sessions_enabled` | `setCloudSessionsEnabled()` + `feature_flags_changed` broadcast |

@@ -66,6 +66,24 @@ function makeConfig(overrides: Partial<ChatSessionConfig>): ChatSessionConfig {
 	};
 }
 
+describe("resolveCredentialError (pi)", () => {
+	it("never asks for a Cline API key on Pi threads", () => {
+		expect(
+			resolveCredentialError(
+				makeConfig({ runtime: "pi", provider: "antigravity", model: "gemini" }),
+			),
+		).toBeNull();
+	});
+
+	it("requires a picked Pi provider and model", () => {
+		expect(
+			resolveCredentialError(
+				makeConfig({ runtime: "pi", provider: "", model: "" }),
+			),
+		).toMatch(/Select a Pi provider and model/);
+	});
+});
+
 describe("resolveCredentialError", () => {
 	it("requires a provider", () => {
 		expect(resolveCredentialError(makeConfig({ provider: "  " }))).toMatch(

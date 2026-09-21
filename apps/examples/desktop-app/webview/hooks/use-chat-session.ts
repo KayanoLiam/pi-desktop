@@ -3737,8 +3737,10 @@ export function useChatSession(environmentId: string) {
 			return {
 				...prev,
 				sessionId: undefined,
+				runtime: initial.runtime,
 				provider: initial.provider,
 				model: initial.model,
+				piThinkingLevel: initial.piThinkingLevel,
 				apiKey:
 					prev.provider === initial.provider ? prev.apiKey : initial.apiKey,
 				...(leavingTaskWorktree
@@ -3804,10 +3806,12 @@ export function useChatSession(environmentId: string) {
 			abortedRef.current = false;
 			clearAbortFallbackTimeout();
 			setSessionId(session.sessionId);
+			const runtime = session.source === "pi" ? "pi" : "cline";
 			setConfig((prev) => ({
 				...prev,
 				environmentId,
 				sessionId: session.sessionId,
+				runtime,
 				executionTarget: session.origin === "cloud" ? "cloud" : "local",
 				repoUrl: session.origin === "cloud" ? session.repoUrl : undefined,
 				branch:
@@ -3907,6 +3911,7 @@ export function useChatSession(environmentId: string) {
 							action: "attach",
 							sessionId: session.sessionId,
 							config: {
+								runtime,
 								executionTarget: session.origin === "cloud" ? "cloud" : "local",
 								repoUrl: session.repoUrl,
 								environmentId,
@@ -3938,6 +3943,7 @@ export function useChatSession(environmentId: string) {
 					...prev,
 					environmentId,
 					sessionId: session.sessionId,
+					runtime,
 					executionTarget: session.origin === "cloud" ? "cloud" : "local",
 					repoUrl: session.origin === "cloud" ? session.repoUrl : undefined,
 					branch:

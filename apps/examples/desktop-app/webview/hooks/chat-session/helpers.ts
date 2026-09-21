@@ -205,6 +205,14 @@ export function resolveCredentialError(
 	config: ChatSessionConfig,
 	options?: { hasActiveSession?: boolean },
 ): string | null {
+	if (config.runtime === "pi") {
+		// Pi owns its credentials (auth.json, env, extension providers); the
+		// desktop only needs a picked model to start the process with.
+		if (!config.provider.trim() || !config.model.trim()) {
+			return "Select a Pi provider and model before sending.";
+		}
+		return null;
+	}
 	if (config.executionTarget === "cloud") {
 		if (config.provider.trim().toLowerCase() !== "cline") {
 			return "Cloud sessions require the Cline provider.";

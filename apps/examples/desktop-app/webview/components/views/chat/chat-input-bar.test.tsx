@@ -98,6 +98,19 @@ vi.mock("@/lib/vercel-streaming-transcription", () => ({
 
 vi.mock("@/hooks/use-toast", () => ({ toast: toastMock }));
 
+const { invokeMock, subscribeMock } = vi.hoisted(() => ({
+	invokeMock: vi.fn(),
+	subscribeMock: vi.fn(
+		(_eventName: string, _handler: (payload: unknown) => void) => () =>
+			undefined,
+	),
+}));
+
+vi.mock("@/lib/desktop-client", () => ({
+	desktopClient: { invoke: invokeMock, subscribe: subscribeMock },
+	writeDesktopDebugLog: vi.fn(),
+}));
+
 let container: HTMLDivElement;
 let root: Root;
 
@@ -118,6 +131,14 @@ beforeEach(() => {
 	});
 	loadProviderModelsMock.mockReset().mockResolvedValue([]);
 	toastMock.mockReset();
+	invokeMock.mockReset().mockImplementation(async (command: string) => {
+		if (command === "list_pi_model_catalog") return { providers: [] };
+		if (command === "list_pi_commands") return { commands: [] };
+		if (command === "list_user_instruction_configs") return {};
+		if (command === "search_workspace_files") return [];
+		return undefined;
+	});
+	subscribeMock.mockReset().mockReturnValue(() => undefined);
 	speechInputMockState.current = null;
 	startVercelStreamingTranscriptionMock.mockReset().mockResolvedValue({
 		done: new Promise<void>(() => {}),
@@ -190,7 +211,11 @@ async function renderVoiceComposer({
 	promptVersion = 0,
 	status = "idle",
 	readOnly = false,
-	piSelectionOnly = false,
+	runtime,
+	provider = "cline",
+	autoApproveTools,
+	onAutoApproveToolsChange,
+	onPiSelectionChange,
 	executionTarget,
 	onAttachFiles = vi.fn(),
 }: {
@@ -204,7 +229,13 @@ async function renderVoiceComposer({
 	promptVersion?: number;
 	status?: ChatSessionStatus;
 	readOnly?: boolean;
-	piSelectionOnly?: boolean;
+	runtime?: "cline" | "pi";
+	provider?: string;
+	autoApproveTools?: boolean;
+	onAutoApproveToolsChange?: (autoApproveTools: boolean) => void;
+	onPiSelectionChange?: Parameters<
+		typeof ChatInputBar
+	>[0]["onPiSelectionChange"];
 	executionTarget?: "cloud" | "local";
 	onAttachFiles?: Parameters<typeof ChatInputBar>[0]["onAttachFiles"];
 } = {}) {
@@ -212,7 +243,10 @@ async function renderVoiceComposer({
 		root.render(
 			<WorkspaceProvider value={workspaceValue}>
 				<ChatInputBar
-					piSelectionOnly={piSelectionOnly}
+					runtime={runtime}
+					autoApproveTools={autoApproveTools}
+					onAutoApproveToolsChange={onAutoApproveToolsChange}
+					onPiSelectionChange={onPiSelectionChange}
 					readOnly={readOnly}
 					executionTarget={executionTarget}
 					attachments={attachments}
@@ -239,7 +273,7 @@ async function renderVoiceComposer({
 					onSwitchGitBranch={vi.fn(async () => true)}
 					promptDraft={{ version: promptVersion, value: prompt }}
 					promptsInQueue={[]}
-					provider="cline"
+					provider={provider}
 					reasoningEffort="low"
 					status={status}
 					summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -252,10 +286,42 @@ async function renderVoiceComposer({
 }
 
 describe("ChatInputBar", () => {
-	it("keeps Pi selection drafts out of the Cline runtime", async () => {
+	it("sends Pi drafts through the Pi runtime once a model is selected", async () => {
+		const onSend = vi.fn();
+		const onPiSelectionChange = vi.fn();
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "openai-codex",
+			model: "gpt-5.6-luna",
+			prompt: "hello pi",
+			onSend,
+			onPiSelectionChange,
+		});
+		expect(
+			container.querySelector('[aria-label^="Pi provider:"]'),
+		).not.toBeNull();
+		// Cline's reasoning selector is replaced by the tool-approval switch.
+		expect(container.querySelector('[aria-label="Thinking level"]')).toBeNull();
+		expect(
+			container.querySelector('[aria-label="Tool approvals"]'),
+		).not.toBeNull();
+		expect(container.textContent).not.toContain("not connected yet");
+		const sendButton = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Send message"]',
+		);
+		expect(sendButton?.disabled).toBe(false);
+		await act(async () => {
+			sendButton?.click();
+		});
+		expect(onSend).toHaveBeenCalledWith("hello pi");
+	});
+
+	it("blocks Pi drafts until a provider and model are picked", async () => {
 		const onSend = vi.fn();
 		await renderVoiceComposer({
-			piSelectionOnly: true,
+			runtime: "pi",
+			provider: "",
+			model: "",
 			prompt: "hello pi",
 			onSend,
 		});
@@ -263,14 +329,8 @@ describe("ChatInputBar", () => {
 			'button[aria-label="Send message"]',
 		);
 		expect(sendButton?.disabled).toBe(true);
-		expect(container.textContent).toContain(
-			"chat execution is not connected yet",
-		);
-		expect(
-			container.querySelector('[aria-label^="Pi provider:"]'),
-		).not.toBeNull();
+		expect(sendButton?.title).toContain("Select a Pi provider and model");
 		await act(async () => {
-			sendButton?.click();
 			container
 				.querySelector("textarea")
 				?.dispatchEvent(
@@ -279,6 +339,72 @@ describe("ChatInputBar", () => {
 		});
 		expect(onSend).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")?.value).toBe("hello pi");
+	});
+
+	it("toggles Pi tool approvals from the composer", async () => {
+		const onAutoApproveToolsChange = vi.fn();
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "p",
+			model: "m",
+			autoApproveTools: true,
+			onAutoApproveToolsChange,
+		});
+		const toggle = container.querySelector<HTMLButtonElement>(
+			'[aria-label="Tool approvals"]',
+		);
+		expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+		expect(toggle?.textContent).toContain("Auto-approve");
+		await act(async () => toggle?.click());
+		expect(onAutoApproveToolsChange).toHaveBeenCalledWith(false);
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "p",
+			model: "m",
+			autoApproveTools: false,
+			onAutoApproveToolsChange,
+		});
+		expect(
+			container
+				.querySelector('[aria-label="Tool approvals"]')
+				?.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(container.textContent).toContain("Ask first");
+	});
+
+	it("lists Pi's commands in the slash menu for Pi threads", async () => {
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "list_pi_commands") {
+				return {
+					commands: [
+						{ name: "review", description: "Review code", source: "extension" },
+						{ name: "skill:brave", source: "skill" },
+					],
+				};
+			}
+			if (command === "list_pi_model_catalog") return { providers: [] };
+			return undefined;
+		});
+		await renderVoiceComposer({ runtime: "pi", provider: "p", model: "m" });
+		const textarea = container.querySelector("textarea");
+		await act(async () => {
+			const setValue = Object.getOwnPropertyDescriptor(
+				HTMLTextAreaElement.prototype,
+				"value",
+			)?.set;
+			setValue?.call(textarea, "/");
+			textarea?.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await act(async () => {
+			await Promise.resolve();
+		});
+		expect(invokeMock).toHaveBeenCalledWith("list_pi_commands", {
+			workspaceRoot: workspaceValue.workspaceRoot,
+		});
+		expect(container.textContent).toContain("/review");
+		expect(container.textContent).toContain("Review code · Extension command");
+		expect(container.textContent).toContain("/skill:brave");
+		expect(container.textContent).not.toContain("/team");
 	});
 
 	it("prevents sending from a read-only session", async () => {

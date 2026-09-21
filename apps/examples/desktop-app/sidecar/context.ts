@@ -93,6 +93,11 @@ export function getEnvironmentContext(
 	return scoped;
 }
 
+/** The root context an environment-scoped context was derived from. */
+export function getOwnerContext(ctx: SidecarContext): SidecarContext {
+	return contextOwners.get(ctx) ?? ctx;
+}
+
 export function getEnvironmentContexts(ctx: SidecarContext): SidecarContext[] {
 	const owner = contextOwners.get(ctx) ?? ctx;
 	getEnvironmentContext(owner, LOCAL_ENVIRONMENT_ID);
@@ -688,6 +693,12 @@ export async function disposeSidecarContext(
 ): Promise<void> {
 	const cleanup: Array<Promise<unknown>> = [];
 	const approvalCleanup: Array<Promise<unknown>> = [];
+	// Pi processes must go first: their pending approvals/questions resolve
+	// through the process, and their live sessions own no Hub resources.
+	const pi = getOwnerContext(ctx).pi;
+	if (pi) {
+		cleanup.push(pi.dispose());
+	}
 
 	for (const scoped of getEnvironmentContexts(ctx)) {
 		for (const pending of scoped.pendingApprovals.values()) {

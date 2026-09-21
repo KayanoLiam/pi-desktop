@@ -13,6 +13,8 @@ import {
 	Cpu,
 	Paperclip,
 	Plus,
+	ShieldCheck,
+	ShieldQuestionMark,
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,7 +40,11 @@ import { useWorkspace } from "@/contexts/workspace-context";
 import type { PromptInQueue } from "@/hooks/chat-session/types";
 import { formatCostUsd } from "@/hooks/use-session-history";
 import { toast } from "@/hooks/use-toast";
-import type { ChatSessionConfig, ChatSessionStatus } from "@/lib/chat-schema";
+import type {
+	ChatRuntime,
+	ChatSessionConfig,
+	ChatSessionStatus,
+} from "@/lib/chat-schema";
 import { imageFilesFromClipboard } from "@/lib/clipboard-images";
 import { cloudRepositoryLabel } from "@/lib/cloud-repositories";
 import { desktopClient, writeDesktopDebugLog } from "@/lib/desktop-client";
@@ -68,7 +74,11 @@ import type { ProviderModel } from "@/lib/provider-schema";
 import { cn } from "@/lib/utils";
 import { startVercelStreamingTranscription } from "@/lib/vercel-streaming-transcription";
 import { MAX_RECORDED_AUDIO_BYTES } from "@/lib/voice-input-limits";
-import { PiModelSelector } from "./pi-model-selector";
+import {
+	PI_CONFIG_CHANGED_EVENT,
+	type PiModelSelectionValue,
+	PiModelSelector,
+} from "./pi-model-selector";
 import { PullRequestBar } from "./pull-request-bar";
 import { WorkspaceSelector as WorkspaceSelectorImpl } from "./workspace-selector";
 
@@ -91,6 +101,47 @@ type SlashCommand = {
 	name: string;
 	description?: string;
 };
+
+type PiSlashCommand = {
+	name: string;
+	description?: string;
+	source: "extension" | "prompt" | "skill";
+};
+
+const PI_SLASH_SOURCE_LABELS: Record<PiSlashCommand["source"], string> = {
+	extension: "Extension command",
+	prompt: "Prompt template",
+	skill: "Skill",
+};
+
+/** Pi's commands (extensions, prompt templates, skills) as composer rows. */
+export function buildPiSlashCommands(response: {
+	commands?: PiSlashCommand[];
+}): SlashCommand[] {
+	const commands = Array.isArray(response.commands) ? response.commands : [];
+	const seen = new Set<string>();
+	return commands.flatMap((command) => {
+		const name = command.name?.trim();
+		if (!name || seen.has(name)) return [];
+		seen.add(name);
+		const kind = PI_SLASH_SOURCE_LABELS[command.source] ?? "Command";
+		return [
+			{
+				name,
+				description: command.description
+					? `${command.description} · ${kind}`
+					: kind,
+			},
+		];
+	});
+}
+
+// Pi commands come from the user's installed Pi (per workspace); remembered
+// across composer instances like the Cline commands below.
+let cachedPiSlashCommands: {
+	workspaceRoot: string;
+	commands: SlashCommand[];
+} | null = null;
 
 type UserInstructionCommand = {
 	id: string;
@@ -305,8 +356,18 @@ type ChatInputBarProps = {
 	environmentId: string;
 	variant?: "conversation" | "welcome";
 	readOnly?: boolean;
-	/** Pi selection preview; never submit these drafts to the Cline runtime. */
-	piSelectionOnly?: boolean;
+	/**
+	 * Which runtime the thread executes through. Pi threads use the Pi model
+	 * picker, Pi's slash commands and the tool-approval switch; Cline threads
+	 * keep the inherited provider picker and reasoning selector.
+	 */
+	runtime?: ChatRuntime;
+	/** Pi threads: whether tools run without asking (the default). */
+	autoApproveTools?: boolean;
+	onAutoApproveToolsChange?: (autoApproveTools: boolean) => void;
+	/** The thread's current Pi selection (seeds the picker for resumed sessions). */
+	piSelection?: PiModelSelectionValue;
+	onPiSelectionChange?: (value: PiModelSelectionValue) => void;
 	status: ChatSessionStatus;
 	hasRunningAgents?: boolean;
 	provider: string;
@@ -357,7 +418,11 @@ function ChatInputBarImpl({
 	environmentId,
 	variant = "conversation",
 	readOnly = false,
-	piSelectionOnly = false,
+	runtime = "cline",
+	autoApproveTools = true,
+	onAutoApproveToolsChange,
+	piSelection,
+	onPiSelectionChange,
 	status,
 	hasRunningAgents = false,
 	provider,
@@ -555,12 +620,19 @@ function ChatInputBarImpl({
 	const unsupportedDraftImageCount = imagesUnsupported
 		? attachments.filter((attachment) => attachment.isImage).length
 		: 0;
+	const isPiRuntime = runtime === "pi";
+	// A Pi thread needs a picked provider/model before its process can start.
+	const needsPiModel =
+		isPiRuntime && (!provider.trim() || !model.trim()) && !hasActiveSession;
+	const sendBlockedReason = needsPiModel
+		? "Select a Pi provider and model before sending"
+		: undefined;
 	const canSend =
 		hasDraft &&
 		!speechInputActive &&
 		!needsCloudRepository &&
 		!readOnly &&
-		!piSelectionOnly;
+		!needsPiModel;
 	const steeringPromptRef = useRef(false);
 	const steerFirstQueuedPrompt = async () => {
 		const firstPrompt = promptsInQueue[0];
@@ -583,12 +655,19 @@ function ChatInputBarImpl({
 		}
 	};
 	const handleSend = useCallback(() => {
-		if (speechInputActive || readOnly || piSelectionOnly) return;
+		if (speechInputActive || readOnly) return;
 		if (unsupportedDraftImageCount > 0) {
 			reportUnsupportedImages();
 			return;
 		}
 		if (needsCloudRepository) return;
+		if (needsPiModel) {
+			toast({
+				title: "Select a Pi model",
+				description: "Choose a provider and model before sending.",
+			});
+			return;
+		}
 		const prompt = promptInput.trim();
 		if (!prompt) {
 			toast({
@@ -602,8 +681,8 @@ function ChatInputBarImpl({
 		onSend(prompt);
 	}, [
 		needsCloudRepository,
+		needsPiModel,
 		readOnly,
-		piSelectionOnly,
 		onSend,
 		promptInput,
 		setPromptInput,
@@ -674,8 +753,12 @@ function ChatInputBarImpl({
 		executionTarget === "local" &&
 		slashKey !== null &&
 		dismissedSlashKey !== slashKey;
-	const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(
-		() => cachedSlashCommands ?? BUILTIN_SLASH_COMMANDS,
+	const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(() =>
+		runtime === "pi"
+			? cachedPiSlashCommands?.workspaceRoot === workspaceRoot
+				? cachedPiSlashCommands.commands
+				: []
+			: (cachedSlashCommands ?? BUILTIN_SLASH_COMMANDS),
 	);
 	const [slashLoading, setSlashLoading] = useState(false);
 	const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
@@ -1114,6 +1197,15 @@ function ChatInputBarImpl({
 		}
 	}, [slashOpen]);
 
+	// Pi installs/removals invalidate the cached Pi command list so the next
+	// menu open re-asks Pi instead of showing stale commands.
+	useEffect(() => {
+		if (!isPiRuntime) return;
+		return desktopClient.subscribe(PI_CONFIG_CHANGED_EVENT, () => {
+			cachedPiSlashCommands = null;
+		});
+	}, [isPiRuntime]);
+
 	// Reload user commands whenever the slash menu opens so newly installed or
 	// edited skills and workflows are reflected without remounting the chat UI.
 	useEffect(() => {
@@ -1121,6 +1213,33 @@ function ChatInputBarImpl({
 			return;
 		}
 		let cancelled = false;
+		if (isPiRuntime) {
+			const cached =
+				cachedPiSlashCommands?.workspaceRoot === workspaceRoot
+					? cachedPiSlashCommands.commands
+					: null;
+			setSlashLoading(cached === null);
+			if (cached) setSlashCommands(cached);
+			desktopClient
+				.invoke<{ commands?: PiSlashCommand[] }>("list_pi_commands", {
+					workspaceRoot,
+				})
+				.then((response) => {
+					if (cancelled) return;
+					const next = buildPiSlashCommands(response);
+					cachedPiSlashCommands = { workspaceRoot, commands: next };
+					setSlashCommands(next);
+				})
+				.catch(() => {
+					// Keep whatever was cached on error.
+				})
+				.finally(() => {
+					if (!cancelled) setSlashLoading(false);
+				});
+			return () => {
+				cancelled = true;
+			};
+		}
 		// Only show the loading row when there is nothing cached to show.
 		setSlashLoading(cachedSlashCommands === null);
 		desktopClient
@@ -1143,7 +1262,7 @@ function ChatInputBarImpl({
 		return () => {
 			cancelled = true;
 		};
-	}, [slashOpen]);
+	}, [isPiRuntime, slashOpen, workspaceRoot]);
 
 	// Filtered slash commands based on the current query.
 	const filteredSlashCommands = useMemo(() => {
@@ -1569,7 +1688,7 @@ function ChatInputBarImpl({
 									title={
 										needsCloudRepository
 											? "Choose a repository"
-											: "Send (Enter)"
+											: (sendBlockedReason ?? "Send (Enter)")
 									}
 									type="button"
 								>
@@ -1606,12 +1725,6 @@ function ChatInputBarImpl({
 					</div>
 				)}
 			</div>
-
-			{piSelectionOnly ? (
-				<p className="px-3 pb-2 text-xs text-muted-foreground">
-					Pi selection preview — chat execution is not connected yet.
-				</p>
-			) : null}
 
 			{/* Composer settings */}
 			<div className="flex min-w-0 items-center justify-between gap-x-3 gap-y-2 rounded-b-xl border-t border-border bg-muted/20 px-2 py-2 text-sm text-muted-foreground">
@@ -1678,8 +1791,12 @@ function ChatInputBarImpl({
 						</button>
 					</div>
 					<div className="min-w-0 shrink-0">
-						{piSelectionOnly ? (
-							<PiModelSelector />
+						{isPiRuntime ? (
+							<PiModelSelector
+								disabled={isBusy}
+								onSelectionChange={onPiSelectionChange}
+								value={piSelection}
+							/>
 						) : (
 							<ModelSelector
 								allowedProviderIds={
@@ -1703,7 +1820,34 @@ function ChatInputBarImpl({
 							/>
 						)}
 					</div>
-					{piSelectionOnly ? null : (
+					{isPiRuntime ? (
+						<button
+							aria-label="Tool approvals"
+							aria-pressed={!autoApproveTools}
+							className={cn(
+								"flex h-7 items-center gap-1.5 rounded-md px-2 text-sm hover:bg-surface-hover",
+								autoApproveTools
+									? "text-muted-foreground"
+									: "text-amber-600 dark:text-amber-400",
+							)}
+							onClick={() => onAutoApproveToolsChange?.(!autoApproveTools)}
+							title={
+								autoApproveTools
+									? "Tools run without asking. Click to review each tool call before it runs."
+									: "Each tool call waits for your approval. Click to let tools run without asking."
+							}
+							type="button"
+						>
+							{autoApproveTools ? (
+								<ShieldCheck className="size-3" />
+							) : (
+								<ShieldQuestionMark className="size-3" />
+							)}
+							<span className="max-[560px]:sr-only">
+								{autoApproveTools ? "Auto-approve" : "Ask first"}
+							</span>
+						</button>
+					) : (
 						<Select
 							disabled={cloudSettingsLocked || modelSupportsReasoning !== true}
 							onValueChange={handleEffortChange}

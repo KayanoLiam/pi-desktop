@@ -1,6 +1,11 @@
 import { CLINE_DEFAULT_MODEL_ID } from "@cline/shared/browser";
 import type { ChatSessionConfig } from "@/lib/chat-schema";
 import { readModelSelectionStorageFromWindow } from "@/lib/model-selection";
+import {
+	readPiModelSelection,
+	selectedPiModelId,
+	selectedPiThinkingLevel,
+} from "@/lib/pi-model-selection";
 import { normalizeProviderId } from "@/lib/provider-id";
 import {
 	LOCAL_WORKSPACE_ENVIRONMENT_ID,
@@ -18,6 +23,7 @@ export { OAUTH_PROVIDER_IDS as OAUTH_MANAGED_PROVIDERS } from "@/lib/provider-co
 
 export const DEFAULT_CHAT_CONFIG: ChatSessionConfig = {
 	sessionId: undefined,
+	runtime: "cline",
 	executionTarget: "local",
 	repoUrl: undefined,
 	workspaceRoot: "",
@@ -36,6 +42,27 @@ export const DEFAULT_CHAT_CONFIG: ChatSessionConfig = {
 	missionStepInterval: undefined,
 	missionTimeIntervalMs: undefined,
 };
+
+/**
+ * Runtime fields for a fresh local Pi thread: the picker's remembered
+ * provider/model. The thinking level needs the catalog (it is clamped to the
+ * model's levels), so the picker reports it once loaded. An empty selection
+ * stays empty and the composer blocks sending until a model is picked.
+ */
+export function getInitialPiRuntimeConfig(): Pick<
+	ChatSessionConfig,
+	"runtime" | "provider" | "model" | "apiKey" | "piThinkingLevel"
+> {
+	const selection = readPiModelSelection();
+	const thinkingLevel = selectedPiThinkingLevel(selection, null);
+	return {
+		runtime: "pi",
+		provider: selection.providerId,
+		model: selectedPiModelId(selection),
+		apiKey: "",
+		piThinkingLevel: thinkingLevel || undefined,
+	};
+}
 
 export function getInitialChatConfig(environmentId: string): ChatSessionConfig {
 	const selection = readModelSelectionStorageFromWindow();

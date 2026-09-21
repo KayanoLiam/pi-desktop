@@ -17,21 +17,28 @@
 
 ![Pi Agent running in a native macOS window, with a local workspace and provider, model, and thinking selectors.](docs/images/pi-desktop.png)
 
-> **Early preview — model selection, not chat execution yet.**
-> The native app and Pi model picker work today. Sending is deliberately disabled
-> for new local Pi threads until the Pi execution runtime is connected.
-> This is an independent desktop project, currently being migrated from Cline.
+> **Early preview — chat runs through your installed Pi CLI.**
+> New local threads execute through `pi --mode rpc`: streaming answers,
+> thinking, tool calls, approvals, cancellation, Pi session history and Pi's
+> slash commands. This is an independent desktop project, currently being
+> migrated from Cline; parts of the tree are still inherited Cline code.
 
 ## What works today
 
 - **A native window.** Tauri 2 wraps a Next.js interface and a Bun backend. The app opens as **Pi Agent**, not a browser tab.
+- **Chat through Pi.** Each active thread is a `pi --mode rpc` process started from the thread's workspace with the picked provider, model and thinking level. Assistant text and thinking stream live; `bash`, `read`, `edit`, `write`, `grep` and extension tools show as tool cards with live output; token usage and cost come from Pi.
+- **Tool approvals, opt-in.** Tools run without asking by default, like the Pi CLI. Flip the composer's shield to **Ask first** and every tool call waits for your approval; the switch works mid-session.
+- **Extension dialogs.** When an installed Pi extension asks a question (`select`, `input`, `confirm`, `editor`), it appears as a question card in the chat; notifications land in the transcript log.
+- **Stop, queue, steer.** Stop a running turn; messages sent while Pi is busy queue as follow-ups.
+- **Pi session history.** Sessions from `~/.pi/agent/sessions` appear in the sidebar with the **Pi** source label. Open one to read it, continue it (Pi is relaunched on that session file), rename or delete it; the same sessions show up in `pi /resume`.
+- **Pi's slash commands.** Typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace. Installing or removing Pi packages in a terminal refreshes the list and the model picker automatically.
 - **Your configured Pi models.** Browse providers and models from your local Pi configuration, filtered by `enabledModels`, rather than an unfiltered built-in catalog.
 - **Selections that stay with you.** Each provider remembers its model; each provider/model pair remembers its thinking level. Pi startup defaults seed the picker when no desktop selection is saved.
 - **Model-aware thinking controls.** Available levels come from model capabilities. Unknown extension capabilities are not guessed.
 - **Light and dark themes.** Saved preferences and system appearance are respected, with a coral accent and the Pi mark throughout the app.
 - **A local-first entry screen.** Choose a workspace and see its branch without Cline onboarding or an account sign-in. Cline Cloud is disabled.
 
-The screenshot shows the current native macOS interface, including its selection-preview notice. Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not a claim that Pi execution or extension management is fully integrated.
+Not yet: forking or editing earlier messages of a Pi thread, editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features.
 
 ## Run locally
 
@@ -40,7 +47,7 @@ The screenshot shows the current native macOS interface, including its selection
 - **Bun 1.3.13** and **Node.js 22 or newer**. Use Bun for dependency installation and scripts.
 - A current stable **Rust** toolchain. The dependency graph requires Rust 1.85 or newer; the complete minimum-version matrix has not been verified.
 - The [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/), including Xcode Command Line Tools on macOS.
-- An existing Pi configuration to populate the picker. An installed `pi` CLI is also needed to discover metadata registered by Pi extensions.
+- An installed [`pi`](https://github.com/earendil-works/pi) CLI on your `PATH` (or `PI_DESKTOP_PI_BIN` pointing at it) with a configured `~/.pi/agent`. Pi runs the chat; the desktop only drives it.
 
 ```sh
 cd ~/Desktop
@@ -73,15 +80,16 @@ The catalog reads `~/.pi/agent`, or the directory selected by `PI_CODING_AGENT_D
 
 Configure providers in Pi, then use the picker’s refresh control to reload. Model identity always includes **both provider ID and model ID**, so identical model names from different providers do not share a selection. A listed credential does not prove that a future model request will succeed.
 
-### Extension discovery and trust
+### How execution works, and what runs your code
 
-The built-in catalog path uses read-only credential/cache adapters with model networking disabled. It does not request inference, refresh credentials, or execute API-key commands, and credentials are not included in the catalog sent to the webview.
+Every active thread is a real `pi --mode rpc` process (the user's installed Pi, not a bundled copy), started in the thread's workspace with `--session-id`/`--session`, `--model provider/id`, `--thinking level` and one extra extension. It loads **your** Pi extensions, packages, credentials and settings, exactly like the terminal. That means:
 
-When `enabledModels` references a provider absent from the bundled SDK, the sidecar may launch the installed `pi` CLI in RPC mode to discover that provider’s real models and thinking levels. Set `PI_DESKTOP_PI_BIN` if the executable is not on `PATH` or you want to select a particular installation.
+- Extension code, tools and MCP servers configured in Pi run with your user's full permissions. Nothing here is a sandbox.
+- RPC mode never shows Pi's project-trust prompt; project-local `.pi` resources follow Pi's saved trust decisions and `defaultProjectTrust`. The desktop does not pass `--approve`.
+- The extra extension is a generated tool-approval gate written to `~/.cline/data/pi-desktop/extensions/`. It hooks `tool_call` and asks the desktop before each tool runs; with auto-approve on (the default) the desktop answers yes immediately.
+- Idle Pi processes exit after ten minutes and are relaunched on the thread's session file when you send again.
 
-**This discovery loads installed Pi extensions.** Pi is launched with `PI_OFFLINE=1`, no session, no tools, and no project context files, but these options are **not a sandbox** for extension code. Do not treat extension discovery as a guarantee of zero network access or filesystem writes. Use only extensions you trust.
-
-If Pi is unavailable, exact authenticated extension references can remain visible with unknown thinking capabilities; wildcard entries are not invented.
+The model picker's catalog path is read-only (no credential refresh, no config writes, no API-key commands, no inference). Providers registered by installed Pi extensions are discovered by launching `pi` in RPC mode with `PI_OFFLINE=1`, no session and no tools; if Pi is unavailable, exact authenticated references stay visible with unknown thinking capabilities and nothing is invented.
 
 ## Architecture and migration
 
@@ -91,9 +99,10 @@ Tauri native shell
 Next.js / React webview
         │  local transport
 Bun sidecar
+        ├── Pi threads: one `pi --mode rpc` process per active session
+        ├── Pi session files (~/.pi/agent/sessions) for history
         ├── Pi configuration and model catalog
-        ├── Installed Pi RPC for extension model discovery
-        └── Inherited Cline runtime and workspace services
+        └── Inherited Cline runtime (existing Cline sessions, SSH environments)
 ```
 
 The goal is a standalone Pi desktop app. **This checkout is not standalone yet:** it retains the Cline monorepo and directly depends on `@cline/core`, `@cline/llms`, `@cline/shared`, and `@cline/ui`. Copying only the desktop directory will not produce a buildable project.
@@ -109,8 +118,7 @@ Existing Cline sessions and SSH environments retain their legacy execution paths
 
 ### Next milestones
 
-- Connect local threads to Pi execution, streaming, tools, approvals, and cancellation.
-- Bring Pi session history and extension workflows into the desktop.
+- Fork, message editing and per-item queue editing for Pi threads; SSH remote threads through Pi.
 - Replace or extract the remaining Cline workspace/runtime dependencies.
 - Migrate application identifiers, updates, signing, and release automation.
 - Resolve inherited test/type/lint failures and establish desktop CI across supported platforms.

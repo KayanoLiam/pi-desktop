@@ -26,6 +26,8 @@ import {
 } from "./context";
 import { createDesktopObservability } from "./observability";
 import { resolveWorkspaceRoot } from "./paths";
+import { startPiConfigWatcher } from "./pi/pi-config-watcher";
+import { ensurePiDesktopGateExtension } from "./pi/pi-desktop-gate-extension";
 import { startServer } from "./server";
 import { buildTelemetrySelfcheckReport } from "./telemetry-selfcheck";
 import { BunRuntime, SIDECAR_HOST, SIDECAR_MODE, SIDECAR_PORT } from "./types";
@@ -96,6 +98,18 @@ async function main() {
 	);
 	await initializeSessionManager(ctx);
 
+	// Pi execution: pre-write the tool-approval gate extension so the first
+	// thread does not pay for it, and follow Pi CLI configuration changes
+	// (package installs, settings edits) so the desktop stays in sync.
+	try {
+		ensurePiDesktopGateExtension();
+	} catch (error) {
+		observability.logger.error?.("Could not prepare the Pi gate extension", {
+			error,
+		});
+	}
+	const piConfigWatcher = startPiConfigWatcher(ctx);
+
 	let shuttingDown = false;
 	let handlingFatalError = false;
 	const shutdown = async (reason = "code_sidecar_shutdown"): Promise<void> => {
@@ -104,6 +118,7 @@ async function main() {
 		}
 		shuttingDown = true;
 		observability.logger.log("Desktop sidecar shutting down", { reason });
+		piConfigWatcher.dispose();
 		await withTimeout(
 			(async () => {
 				try {

@@ -1,8 +1,16 @@
 import { GeneratedMediaSchema } from "@cline/shared/browser";
 import { z } from "zod";
+import { PI_THINKING_LEVELS } from "./pi-model-selection";
+
+export const ChatRuntimeSchema = z.enum(["cline", "pi"]);
 
 export const ChatSessionConfigSchema = z.object({
 	sessionId: z.string().min(1).optional(),
+	/**
+	 * Which execution runtime owns the thread: the inherited Cline Hub, or the
+	 * user's installed Pi CLI (`pi --mode rpc`). New local threads are Pi.
+	 */
+	runtime: ChatRuntimeSchema.default("cline"),
 	executionTarget: z.enum(["local", "cloud"]).default("local"),
 	repoUrl: z.string().optional(),
 	branch: z.string().optional(),
@@ -18,6 +26,8 @@ export const ChatSessionConfigSchema = z.object({
 	maxIterations: z.number().int().positive().optional(),
 	thinking: z.boolean().optional(),
 	reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+	/** Pi thinking level for `runtime: "pi"` threads (Pi's own scale). */
+	piThinkingLevel: z.enum(PI_THINKING_LEVELS).optional(),
 	enableTools: z.boolean(),
 	autoApproveTools: z.boolean().optional(),
 	missionStepInterval: z.number().int().positive().optional(),
@@ -113,6 +123,7 @@ export const ChatViewStateSchema = z.object({
 	summary: ChatSummarySchema,
 });
 
+export type ChatRuntime = z.infer<typeof ChatRuntimeSchema>;
 export type ChatSessionConfig = z.infer<typeof ChatSessionConfigSchema>;
 export type ChatSessionStatus = z.infer<typeof ChatSessionStatusSchema>;
 export type ChatMessageImage = z.infer<typeof ChatMessageImageSchema>;

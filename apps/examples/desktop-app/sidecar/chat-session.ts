@@ -55,14 +55,16 @@ import {
 } from "./context";
 import { isCloudAgentsEnabled } from "./feature-flags";
 import { readSessionManifest, sharedSessionDataDir } from "./paths";
+import { getPiSessionManager } from "./pi/pi-session-manager";
 import { persistSessionMessages } from "./session-data/messages";
-import type {
-	ChatSessionCommandRequest,
-	JsonRecord,
-	LiveSession,
-	PromptInQueue,
-	SessionRuntimeBinding,
-	SidecarContext,
+import {
+	type ChatSessionCommandRequest,
+	type JsonRecord,
+	type LiveSession,
+	LOCAL_ENVIRONMENT_ID,
+	type PromptInQueue,
+	type SessionRuntimeBinding,
+	type SidecarContext,
 } from "./types";
 
 type SessionConnectionUpdate = Parameters<
@@ -2203,9 +2205,22 @@ export async function handleChatSessionCommand(
 				);
 		}
 	}
+	// Pi threads: new local threads created with runtime "pi", and any session
+	// the installed Pi has on disk (opened from history). They never touch the
+	// Cline Hub.
+	const explicitEnvironment = readEnvironmentId(request.config);
+	if (
+		(explicitEnvironment ?? LOCAL_ENVIRONMENT_ID) === LOCAL_ENVIRONMENT_ID &&
+		(request.config?.runtime === "pi" ||
+			(sessionId !== undefined &&
+				sessionId.length > 0 &&
+				!ctx.liveSessions.has(sessionId) &&
+				getPiSessionManager(ctx).owns(sessionId)))
+	) {
+		return getPiSessionManager(ctx).handle(request);
+	}
 	const handler = ACTION_HANDLERS[request.action];
 	if (!handler) throw new Error("unsupported action");
-	const explicitEnvironment = readEnvironmentId(request.config);
 	const binding =
 		!explicitEnvironment && request.sessionId
 			? await findSessionRuntimeBinding(ctx, request.sessionId)

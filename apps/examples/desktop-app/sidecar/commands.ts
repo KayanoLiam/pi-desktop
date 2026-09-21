@@ -87,6 +87,7 @@ import { resolveDesktopTelemetryUser } from "./client-context";
 import { resolveFreshClineAuthToken } from "./cline-auth";
 import {
 	getCloudSessionManager,
+	isCloudOuterSessionId,
 	resetCloudSessionManager,
 } from "./cloud-sessions";
 import {
@@ -159,6 +160,7 @@ import {
 	sessionLogPath,
 	sharedSessionDataDir,
 } from "./paths";
+import { getPiSessionManager } from "./pi/pi-session-manager";
 import { getPullRequestStatus } from "./pull-request";
 import { capturePullRequestEvent } from "./pull-request-telemetry";
 import { resolveDesktopRemoteHelper } from "./remote-helper";
@@ -371,6 +373,24 @@ async function getCommandSessionBinding(
 	return environmentId
 		? getRuntimeBinding(ctx, environmentId)
 		: await findSessionRuntimeBinding(ctx, sessionId);
+}
+
+/**
+ * Whether a session-scoped command targets a Pi session: local environment,
+ * not a live Cline session, and known to the installed Pi (live process or
+ * session file).
+ */
+function isPiSessionCommand(
+	ctx: SidecarContext,
+	sessionId: string,
+	args: Record<string, unknown> | undefined,
+): boolean {
+	if (!sessionId) return false;
+	const environmentId = requestedEnvironmentId(args);
+	if (environmentId && environmentId !== LOCAL_ENVIRONMENT_ID) return false;
+	if (ctx.liveSessions.has(sessionId)) return false;
+	if (isCloudOuterSessionId(sessionId)) return false;
+	return getPiSessionManager(ctx).owns(sessionId);
 }
 
 // Strict allowlist: the opener hands the URL to the OS protocol handler, so
@@ -2037,6 +2057,12 @@ export async function handleCommand(
 		const cloud = getCloudSessionManager(ctx);
 		const maxMessages =
 			typeof args?.maxMessages === "number" ? args.maxMessages : 800;
+		if (isPiSessionCommand(ctx, sessionId, args)) {
+			const messages = getPiSessionManager(ctx).readMessages(sessionId) ?? [];
+			return messages.slice(
+				Math.max(0, messages.length - Math.max(1, maxMessages)),
+			);
+		}
 		if (cloud.isCloudSession(sessionId)) {
 			const messages = await cloud.readMessages(sessionId);
 			return await readSessionMessages(ctx, sessionId, maxMessages, messages);
@@ -2055,6 +2081,7 @@ export async function handleCommand(
 	}
 	if (command === "read_session_hooks") {
 		const sessionId = String(args?.sessionId ?? "").trim();
+		if (isPiSessionCommand(ctx, sessionId, args)) return [];
 		const binding = await getCommandSessionBinding(ctx, sessionId, args);
 		if (binding?.kind === "ssh") {
 			throw new Error(
@@ -2068,6 +2095,7 @@ export async function handleCommand(
 	}
 	if (command === "list_session_agents") {
 		const sessionId = String(args?.sessionId ?? "").trim();
+		if (isPiSessionCommand(ctx, sessionId, args)) return [];
 		const binding = await getCommandSessionBinding(ctx, sessionId, args);
 		if (binding?.kind === "ssh") {
 			throw new Error(
@@ -2087,13 +2115,17 @@ export async function handleCommand(
 			binding.hubClient.getUrl() ??
 			binding.sessionManager.runtimeAddress?.trim() ??
 			null;
-		const runningSessionCount = Array.from(ctx.liveSessions.entries()).filter(
-			([sessionId, session]) =>
-				(session.busy || session.status === "running") &&
-				(session.environmentId ??
-					ctx.sessionEnvironmentIds.get(sessionId) ??
-					LOCAL_ENVIRONMENT_ID) === binding.environmentId,
-		).length;
+		const runningSessionCount =
+			Array.from(ctx.liveSessions.entries()).filter(
+				([sessionId, session]) =>
+					(session.busy || session.status === "running") &&
+					(session.environmentId ??
+						ctx.sessionEnvironmentIds.get(sessionId) ??
+						LOCAL_ENVIRONMENT_ID) === binding.environmentId,
+			).length +
+			(binding.environmentId === LOCAL_ENVIRONMENT_ID
+				? getPiSessionManager(ctx).runningCount()
+				: 0);
 		return {
 			environmentId: binding.environmentId,
 			workspaceRoot: binding.workspaceRoot,
@@ -2301,7 +2333,26 @@ export async function handleCommand(
 				ctx.logger?.error?.("Cloud session discovery failed", { error });
 				return [];
 			});
-		return mergeDiscoveredSessionLists(cloud, local, Math.max(1, limit));
+		let pi: JsonRecord[] = [];
+		try {
+			pi = getPiSessionManager(ctx).listDiscovered(limit);
+		} catch (error) {
+			ctx.logger?.error?.("Pi session discovery failed", { error });
+		}
+		return mergeDiscoveredSessionLists(
+			cloud,
+			[...pi, ...local],
+			Math.max(1, limit),
+		);
+	}
+	if (command === "list_pi_commands") {
+		const workspaceRoot =
+			typeof args?.workspaceRoot === "string" ? args.workspaceRoot.trim() : "";
+		return {
+			commands: await getPiSessionManager(ctx).listCommands(
+				workspaceRoot || ctx.localWorkspaceRoot,
+			),
+		};
 	}
 	if (command === "search_sessions") {
 		const query = String(args?.query ?? "").trim();
@@ -2359,6 +2410,18 @@ export async function handleCommand(
 		hits = hits.filter(
 			(hit) => !workspaceRoot || hit.workspaceRoot === workspaceRoot,
 		);
+		try {
+			const seenPi = new Set(hits.map((hit) => hit.sessionId));
+			for (const hit of getPiSessionManager(ctx).search(
+				query,
+				limit,
+				workspaceRoot,
+			)) {
+				if (!seenPi.has(hit.sessionId)) hits.push(hit);
+			}
+		} catch (error) {
+			ctx.logger?.debug("Pi session search failed", { error });
+		}
 		const cloud = await cloudDiscovery;
 		// Account changes replace the manager; discard any in-flight old scope.
 		if (cloud && ctx.cloudSessionManager === cloud.manager) {
@@ -2381,6 +2444,9 @@ export async function handleCommand(
 	if (command === "get_discovered_session") {
 		const sessionId = String(args?.sessionId ?? args?.session_id ?? "").trim();
 		if (!sessionId) throw new Error("session id is required");
+		if (isPiSessionCommand(ctx, sessionId, args)) {
+			return getPiSessionManager(ctx).getDiscovered(sessionId) ?? null;
+		}
 		const cloud = getCloudSessionManager(ctx);
 		if (cloud.isCloudSession(sessionId)) {
 			// The active-scope list can omit a session created under another
@@ -2463,6 +2529,14 @@ export async function handleCommand(
 		const sessionId = String(args?.sessionId ?? "").trim();
 		if (!sessionId) throw new Error("session id is required");
 		const title = normalizeSessionTitle(String(args?.title ?? ""));
+		if (isPiSessionCommand(ctx, sessionId, args)) {
+			if (
+				!(await getPiSessionManager(ctx).setSessionName(sessionId, title ?? ""))
+			) {
+				throw new Error(`Session ${sessionId} not found`);
+			}
+			return true;
+		}
 		const cloud = getCloudSessionManager(ctx);
 		if (cloud.isCloudSession(sessionId)) {
 			if (!title) throw new Error("title is required");
@@ -2483,6 +2557,12 @@ export async function handleCommand(
 		const patch = args?.metadata;
 		if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
 			throw new Error("metadata patch is required");
+		}
+		if (isPiSessionCommand(ctx, sessionId, args)) {
+			return getPiSessionManager(ctx).metadata.patch(
+				sessionId,
+				patch as JsonRecord,
+			);
 		}
 		// updateSession replaces metadata wholesale in both the session row and
 		// the manifest, so merge over what each already holds. A null value
@@ -2526,6 +2606,18 @@ export async function handleCommand(
 	if (command === "delete_chat_session" || command === "delete_cli_session") {
 		const sessionId = String(args?.sessionId ?? args?.session_id ?? "").trim();
 		if (!sessionId) throw new Error("session id is required");
+		if (isPiSessionCommand(ctx, sessionId, args)) {
+			ctx.logger?.log("Deleting Pi session", { sessionId });
+			const deleted = await getPiSessionManager(ctx).deleteSession(sessionId);
+			if (deleted) {
+				broadcastEvent(ctx, "session_deleted", {
+					sessionId,
+					command,
+					deleted: true,
+				});
+			}
+			return deleted;
+		}
 		const cloud = getCloudSessionManager(ctx);
 		if (cloud.isCloudSession(sessionId)) {
 			await cloud.delete(sessionId);

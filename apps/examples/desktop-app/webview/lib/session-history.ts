@@ -87,6 +87,7 @@ export function getSessionSourceLabel(source: string): string {
 	const knownLabel = {
 		cli: "CLI",
 		desktop: "Desktop",
+		pi: "Pi",
 		vscode: "VS Code",
 		"vscode-webview": "VS Code",
 	}[source.trim().toLowerCase()];

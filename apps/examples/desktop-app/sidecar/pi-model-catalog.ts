@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +10,7 @@ import {
 	type PiThinkingLevel,
 	piModelKey,
 } from "../webview/lib/pi-model-selection";
+import { PiRpcProcess } from "./pi/pi-rpc-process";
 
 /** Subset of Pi's Model object needed to describe a picker entry. */
 interface PiRpcModel {
@@ -32,86 +32,47 @@ const PI_RPC_TIMEOUT_MS = 15_000;
  * not answer in time; callers must then avoid guessing capabilities.
  */
 export async function listPiRpcModels(): Promise<PiRpcModel[] | null> {
-	const bin = process.env.PI_DESKTOP_PI_BIN?.trim() || "pi";
-	return await new Promise((resolve) => {
-		let settled = false;
-		const finish = (value: PiRpcModel[] | null) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			child.kill();
-			resolve(value);
-		};
-		let child: ReturnType<typeof spawn>;
-		try {
-			child = spawn(
-				bin,
-				[
-					"--mode",
-					"rpc",
-					"--no-session",
-					"--no-tools",
-					"--no-skills",
-					"--no-prompt-templates",
-					"--no-themes",
-					"--no-context-files",
-					"--no-approve",
-				],
-				{
-					cwd: tmpdir(),
-					env: { ...process.env, PI_OFFLINE: "1" },
-					stdio: ["pipe", "pipe", "ignore"],
-				},
-			);
-		} catch {
-			resolve(null);
-			return;
-		}
-		const timer = setTimeout(() => finish(null), PI_RPC_TIMEOUT_MS);
-		child.on("error", () => finish(null));
-		child.on("exit", () => finish(null));
-		let buffer = "";
-		child.stdout?.setEncoding("utf8");
-		child.stdout?.on("data", (chunk: string) => {
-			buffer += chunk;
-			let newline = buffer.indexOf("\n");
-			while (newline >= 0) {
-				const line = buffer.slice(0, newline);
-				buffer = buffer.slice(newline + 1);
-				newline = buffer.indexOf("\n");
-				let message: unknown;
-				try {
-					message = JSON.parse(line);
-				} catch {
-					continue;
-				}
-				const response = message as {
-					type?: string;
-					command?: string;
-					success?: boolean;
-					data?: { models?: unknown };
-				};
-				if (
-					response.type !== "response" ||
-					response.command !== "get_available_models"
-				)
-					continue;
-				const models = response.success ? response.data?.models : undefined;
-				finish(
-					Array.isArray(models)
-						? models.filter(
-								(model): model is PiRpcModel =>
-									!!model &&
-									typeof model === "object" &&
-									typeof (model as PiRpcModel).provider === "string" &&
-									typeof (model as PiRpcModel).id === "string",
-							)
-						: null,
-				);
-			}
+	let child: PiRpcProcess;
+	try {
+		child = new PiRpcProcess({
+			args: [
+				"--mode",
+				"rpc",
+				"--no-session",
+				"--no-tools",
+				"--no-skills",
+				"--no-prompt-templates",
+				"--no-themes",
+				"--no-context-files",
+				"--no-approve",
+			],
+			cwd: tmpdir(),
+			env: { ...process.env, PI_OFFLINE: "1" },
 		});
-		child.stdin?.write('{"id":"desktop","type":"get_available_models"}\n');
-	});
+	} catch {
+		return null;
+	}
+	try {
+		const response = await child.request<{ models?: unknown }>(
+			{ type: "get_available_models" },
+			{ timeoutMs: PI_RPC_TIMEOUT_MS },
+		);
+		if (!response.success) return null;
+		const models = response.data?.models;
+		return Array.isArray(models)
+			? models.filter(
+					(model): model is PiRpcModel =>
+						!!model &&
+						typeof model === "object" &&
+						typeof (model as PiRpcModel).provider === "string" &&
+						typeof (model as PiRpcModel).id === "string",
+				)
+			: null;
+	} catch {
+		return null;
+	} finally {
+		void child.kill(500);
+	}
 }
 
 /** Pi's `enabledModels` glob semantics: match "provider/id" or the bare id, case-insensitively. */

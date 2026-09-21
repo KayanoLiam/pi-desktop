@@ -2,7 +2,7 @@
 
 import { SearchCombobox } from "@cline/ui";
 import { Box, Database, Lightbulb, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { desktopClient } from "@/lib/desktop-client";
 import {
 	emptyPiModelSelection,
@@ -10,6 +10,7 @@ import {
 	PI_MODEL_SELECTION_STORAGE_KEY,
 	PI_THINKING_LEVEL_LABELS,
 	type PiModelCatalog,
+	type PiThinkingLevel,
 	piModelKey,
 	readPiModelSelection,
 	selectedPiModelId,
@@ -17,8 +18,42 @@ import {
 	selectPiProvider,
 } from "@/lib/pi-model-selection";
 
-/** Selection-only preview: deliberately never updates Cline's chat config. */
-export function PiModelSelector() {
+/** Event the sidecar broadcasts when `~/.pi/agent` configuration changes. */
+export const PI_CONFIG_CHANGED_EVENT = "pi_config_changed";
+
+export type PiModelSelectionValue = {
+	providerId: string;
+	modelId: string;
+	thinkingLevel: PiThinkingLevel | "";
+};
+
+type PiModelSelectorProps = {
+	/**
+	 * The thread's current Pi selection. A session opened from history seeds
+	 * the picker with the model it was recorded with (like Pi's own /resume)
+	 * instead of the desktop's remembered pair; ignored when its provider is
+	 * not in the catalog.
+	 */
+	value?: PiModelSelectionValue;
+	/**
+	 * Reports the effective selection: after the catalog loads (so a thread
+	 * can start from the remembered pair) and after every user change.
+	 */
+	onSelectionChange?: (value: PiModelSelectionValue) => void;
+	/** Pi cannot switch models while it is streaming. */
+	disabled?: boolean;
+};
+
+/**
+ * Pi provider → model → thinking picker. The choice is remembered in browser
+ * storage (see `lib/pi-model-selection.ts`) independently of Cline's model
+ * settings and reported to the thread through `onSelectionChange`.
+ */
+export function PiModelSelector({
+	value,
+	onSelectionChange,
+	disabled = false,
+}: PiModelSelectorProps) {
 	const [catalog, setCatalog] = useState<PiModelCatalog | null>(null);
 	const [selection, setSelection] = useState(emptyPiModelSelection);
 	const [loaded, setLoaded] = useState(false);
@@ -26,6 +61,11 @@ export function PiModelSelector() {
 	const [error, setError] = useState(false);
 	const [saveFailed, setSaveFailed] = useState(false);
 	const [revision, setRevision] = useState(0);
+	const onSelectionChangeRef = useRef(onSelectionChange);
+	onSelectionChangeRef.current = onSelectionChange;
+	const valueRef = useRef(value);
+	valueRef.current = value;
+	const lastReportedRef = useRef<string | null>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly reloads models.json on request.
 	useEffect(() => {
@@ -37,7 +77,30 @@ export function PiModelSelector() {
 			.then((next) => {
 				if (cancelled) return;
 				let stored = readPiModelSelection();
-				if (!stored.providerId && next.defaultSelection) {
+				const seed = valueRef.current;
+				const seeded =
+					seed?.providerId &&
+					seed.modelId &&
+					next.providers.some((provider) => provider.id === seed.providerId)
+						? seed
+						: undefined;
+				if (seeded) {
+					stored = {
+						...stored,
+						providerId: seeded.providerId,
+						modelByProvider: {
+							...stored.modelByProvider,
+							[seeded.providerId]: seeded.modelId,
+						},
+						thinkingByModel: seeded.thinkingLevel
+							? {
+									...stored.thinkingByModel,
+									[piModelKey(seeded.providerId, seeded.modelId)]:
+										seeded.thinkingLevel,
+								}
+							: stored.thinkingByModel,
+					};
+				} else if (!stored.providerId && next.defaultSelection) {
 					const { providerId, modelId } = next.defaultSelection;
 					stored = {
 						...stored,
@@ -48,8 +111,24 @@ export function PiModelSelector() {
 						},
 					};
 				}
+				const selected = selectPiProvider(
+					stored,
+					next.providers,
+					stored.providerId,
+				);
+				// A resumed session's model may no longer be in the catalog; keep
+				// it selected rather than silently switching the session to the
+				// provider's first model.
 				setSelection(
-					selectPiProvider(stored, next.providers, stored.providerId),
+					seeded && selected.providerId === seeded.providerId
+						? {
+								...selected,
+								modelByProvider: {
+									...selected.modelByProvider,
+									[seeded.providerId]: seeded.modelId,
+								},
+							}
+						: selected,
 				);
 				setCatalog(next);
 				setLoaded(true);
@@ -66,6 +145,14 @@ export function PiModelSelector() {
 			cancelled = true;
 		};
 	}, [revision]);
+
+	// Installing or removing Pi packages/extensions changes the available
+	// providers and models; reload without requiring a manual refresh.
+	useEffect(() => {
+		return desktopClient.subscribe(PI_CONFIG_CHANGED_EVENT, () => {
+			setRevision((current) => current + 1);
+		});
+	}, []);
 
 	useEffect(() => {
 		if (!loaded) return;
@@ -88,7 +175,24 @@ export function PiModelSelector() {
 	const thinkingLevels = model?.thinkingLevels ?? [];
 	// A model that only accepts "off" has nothing to choose.
 	const thinkingSelectable =
-		!loading && !error && thinkingLevels.length > 1 && thinkingLevel !== "";
+		!loading &&
+		!error &&
+		!disabled &&
+		thinkingLevels.length > 1 &&
+		thinkingLevel !== "";
+
+	useEffect(() => {
+		if (!loaded) return;
+		const value: PiModelSelectionValue = {
+			providerId: provider?.id ?? "",
+			modelId: provider ? modelId : "",
+			thinkingLevel,
+		};
+		const key = JSON.stringify(value);
+		if (lastReportedRef.current === key) return;
+		lastReportedRef.current = key;
+		onSelectionChangeRef.current?.(value);
+	}, [loaded, provider, model, thinkingLevel]);
 
 	return (
 		<div className="flex min-w-0 flex-col gap-1">
@@ -100,7 +204,7 @@ export function PiModelSelector() {
 				<SearchCombobox
 					ariaLabel="Pi provider"
 					className="max-w-48 max-[560px]:max-w-28"
-					disabled={loading || error}
+					disabled={loading || error || disabled}
 					emptyText="No Pi providers configured"
 					loading={loading}
 					onValueChange={(providerId) =>
@@ -127,7 +231,11 @@ export function PiModelSelector() {
 					ariaLabel="Pi model"
 					className="max-w-52 max-[560px]:max-w-28"
 					disabled={
-						loading || error || !provider || provider.models.length === 0
+						loading ||
+						error ||
+						disabled ||
+						!provider ||
+						provider.models.length === 0
 					}
 					emptyText="No models for this provider"
 					onValueChange={(id) => {
@@ -187,7 +295,11 @@ export function PiModelSelector() {
 					}
 					placement="top"
 					searchPlaceholder="Search thinking levels..."
-					value={thinkingSelectable ? thinkingLevel : ""}
+					value={
+						thinkingSelectable || (disabled && thinkingLevel)
+							? thinkingLevel
+							: ""
+					}
 				/>
 				<button
 					aria-label="Refresh Pi models"

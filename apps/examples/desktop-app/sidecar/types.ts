@@ -11,6 +11,7 @@ import type {
 } from "@cline/core";
 import type { MessageWithMetadata } from "@cline/llms";
 import type { UserContext } from "@cline/shared";
+import type { PiSessionManager } from "./pi/pi-session-manager";
 
 export const LOCAL_ENVIRONMENT_ID = "local";
 
@@ -166,6 +167,11 @@ export type SidecarContext = {
 	 * replayed to webviews that connect after the event fired.
 	 */
 	hubBuildMismatch: ManagedHubBuildMismatchEvent | null;
+	/**
+	 * Pi execution runtime (created lazily by `getPiSessionManager`). Lives on
+	 * the owner context; environment-scoped contexts inherit it.
+	 */
+	pi?: PiSessionManager;
 };
 export type BunRuntimeApi = {
 	serve: (options: unknown) => { port: number; stop?: () => void };

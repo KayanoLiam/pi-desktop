@@ -10,8 +10,16 @@ import {
 } from "@/lib/pi-model-selection";
 import { PiModelSelector } from "./pi-model-selector";
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock("@/lib/desktop-client", () => ({ desktopClient: { invoke } }));
+const { invoke, subscribe } = vi.hoisted(() => ({
+	invoke: vi.fn(),
+	subscribe: vi.fn(
+		(_eventName: string, _handler: (payload: unknown) => void) => () =>
+			undefined,
+	),
+}));
+vi.mock("@/lib/desktop-client", () => ({
+	desktopClient: { invoke, subscribe },
+}));
 
 const catalog: PiModelCatalog = {
 	providers: [
@@ -82,8 +90,8 @@ async function choose(label: Picker, text: string) {
 	await act(async () => option.click());
 }
 
-async function render() {
-	await act(async () => root.render(<PiModelSelector />));
+async function render(props: Parameters<typeof PiModelSelector>[0] = {}) {
+	await act(async () => root.render(<PiModelSelector {...props} />));
 }
 
 async function refresh() {
@@ -253,6 +261,95 @@ describe("Pi model selector", () => {
 		await render();
 		expect(container.textContent).toContain("No configured Pi models");
 		expect(trigger("Pi model").disabled).toBe(true);
+	});
+
+	it("reports the effective selection to the thread and reloads on Pi config changes", async () => {
+		const onSelectionChange = vi.fn();
+		invoke.mockResolvedValue({
+			...catalog,
+			defaultSelection: { providerId: "alpha", modelId: "alpha-only" },
+			defaultThinkingLevel: "high",
+		});
+		await render({ onSelectionChange });
+		expect(onSelectionChange).toHaveBeenLastCalledWith({
+			providerId: "alpha",
+			modelId: "alpha-only",
+			thinkingLevel: "high",
+		});
+		await choose("Pi thinking level", "Low");
+		expect(onSelectionChange).toHaveBeenLastCalledWith({
+			providerId: "alpha",
+			modelId: "alpha-only",
+			thinkingLevel: "low",
+		});
+		await choose("Pi provider", "Beta");
+		expect(onSelectionChange).toHaveBeenLastCalledWith({
+			providerId: "beta",
+			modelId: "shared",
+			thinkingLevel: "high",
+		});
+		expect(subscribe).toHaveBeenCalledWith(
+			"pi_config_changed",
+			expect.any(Function),
+		);
+		// A Pi install/remove broadcast reloads the catalog without a click.
+		invoke.mockResolvedValueOnce({ providers: [] });
+		await act(async () => {
+			subscribe.mock.calls.at(-1)?.[1]({});
+		});
+		expect(invoke).toHaveBeenCalledTimes(2);
+		expect(container.textContent).toContain("No configured Pi models");
+	});
+
+	it("seeds a resumed session's recorded model and keeps it when the catalog lacks it", async () => {
+		window.localStorage.setItem(
+			PI_MODEL_SELECTION_STORAGE_KEY,
+			JSON.stringify({
+				version: 1,
+				providerId: "alpha",
+				modelByProvider: { alpha: "alpha-only" },
+				thinkingByModel: {},
+			}),
+		);
+		const onSelectionChange = vi.fn();
+		await render({
+			onSelectionChange,
+			value: { providerId: "beta", modelId: "retired", thinkingLevel: "low" },
+		});
+		expect(trigger("Pi provider").textContent).toContain("Beta");
+		expect(onSelectionChange).toHaveBeenLastCalledWith({
+			providerId: "beta",
+			modelId: "retired",
+			thinkingLevel: "",
+		});
+		// A provider the catalog does not know falls back to the remembered pair.
+		await act(async () => root.unmount());
+		window.localStorage.setItem(
+			PI_MODEL_SELECTION_STORAGE_KEY,
+			JSON.stringify({
+				version: 1,
+				providerId: "alpha",
+				modelByProvider: { alpha: "alpha-only" },
+				thinkingByModel: {},
+			}),
+		);
+		root = createRoot(container);
+		await render({
+			onSelectionChange,
+			value: { providerId: "gone", modelId: "x", thinkingLevel: "" },
+		});
+		expect(onSelectionChange).toHaveBeenLastCalledWith({
+			providerId: "alpha",
+			modelId: "alpha-only",
+			thinkingLevel: "medium",
+		});
+	});
+
+	it("freezes the picker while Pi is streaming", async () => {
+		await render({ disabled: true });
+		expect(trigger("Pi provider").disabled).toBe(true);
+		expect(trigger("Pi model").disabled).toBe(true);
+		expect(trigger("Pi thinking level").disabled).toBe(true);
 	});
 
 	it("still allows selection when browser storage is unavailable", async () => {
