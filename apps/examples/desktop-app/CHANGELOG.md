@@ -1,4 +1,38 @@
-# Cline Desktop Changelog
+# Pi Desktop Changelog
+
+## 0.1.0-beta.1
+
+First public beta of **Pi**, a native desktop app for the [Pi](https://github.com/earendil-works/pi) coding agent. It drives the `pi` CLI you already have installed; nothing runs without it.
+
+**What works**
+
+- Chat through your installed Pi: each thread is a `pi --mode rpc` process started from the thread's workspace with the provider, model and thinking level you pick. Answers and thinking stream live; `bash`, `read`, `edit`, `write`, `grep` and extension tools show as tool cards with live output; token usage and cost come from Pi
+- Tool approvals are opt-in: tools run without asking by default, like the Pi CLI. Flip the composer's shield to **Ask first** and every tool call waits for you; the switch works mid-session
+- Extension dialogs (`select`, `input`, `confirm`, `editor`) appear as question cards in the chat
+- Stop a running turn; messages sent while Pi is busy queue as follow-ups
+- Pi session history from `~/.pi/agent/sessions` appears in the sidebar. Open, continue, rename or delete sessions; they also show up in `pi /resume`
+- Pi's slash commands: typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace
+- Your configured Pi models, filtered by `enabledModels`, with per-provider model memory and per-model thinking levels
+- Light and dark themes, a local-first entry screen, no account or sign-in
+
+**Install (macOS, Apple Silicon)**
+
+Download the DMG, drag **Pi** to Applications. This beta is **not notarized**, so macOS blocks the first launch. Either open **System Settings → Privacy & Security** and choose **Open Anyway**, or run:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Pi.app"
+```
+
+**Known limitations**
+
+- Apple Silicon only. No Intel, Windows or Linux builds yet
+- No auto-update: install new betas by downloading them
+- Not yet: forking or editing earlier messages of a Pi thread, editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features
+- Settings and session data still live under `~/.cline/data` for the inherited parts of the app
+
+---
+
+Entries below are inherited from Cline Desktop, which Pi Desktop was forked from.
 
 ## 0.0.32
 

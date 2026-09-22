@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="#install-macos-beta">Install</a> ·
   <a href="#run-locally">Run locally</a> ·
   <a href="apps/examples/desktop-app/README.md">Development guide</a> ·
   <a href="https://github.com/KayanoLiam/pi-desktop/issues">Issues</a>
@@ -39,6 +40,24 @@
 - **A local-first entry screen.** Choose a workspace and see its branch without Cline onboarding or an account sign-in. Cline Cloud is disabled.
 
 Not yet: forking or editing earlier messages of a Pi thread, editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features.
+
+## Install (macOS beta)
+
+Grab the latest `Pi_<version>_aarch64-local-unsigned.dmg` from
+[Releases](https://github.com/KayanoLiam/pi-desktop/releases) and drag **Pi**
+to Applications. You need the [`pi`](https://github.com/earendil-works/pi) CLI
+installed and configured; the app drives it, it does not bundle it.
+
+The beta is ad-hoc signed and **not notarized**, so macOS blocks the first
+launch. Either open **System Settings → Privacy & Security** and choose
+**Open Anyway**, or run:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Pi.app"
+```
+
+Apple Silicon only for now, and there is no auto-update: install newer betas
+by downloading them.
 
 ## Run locally
 
