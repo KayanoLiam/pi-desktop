@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -7,6 +8,7 @@ import {
 	ensureLoginShellPath,
 	extractMarkedEnv,
 	extractMarkedPath,
+	IMPORTED_SHELL_ENV_VARS,
 	loginShellFor,
 	mergePaths,
 	resolveLoginShellEnvironment,
@@ -288,6 +290,72 @@ describe("ensureLoginShellPath", () => {
 			});
 			expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7890");
 			expect(env.http_proxy).toBe("http://from-launcher");
+		},
+	);
+
+	posixTest.each(IMPORTED_SHELL_ENV_VARS)(
+		"keeps late-imported %s enumerable for child environments without replacing accessors",
+		async (name) => {
+			const value = "http://127.0.0.1:7890";
+			const shell = writeFakeShell(`export ${name}="${value}"; eval "$4"`);
+			const env: NodeJS.ProcessEnv = { ...CLEAN_ENV };
+			// Bun exposes absent proxy variables as non-enumerable accessors.
+			// Assignment updates the native environment but not enumerability.
+			let stored: string | undefined;
+			const get = () => stored;
+			const set = (value: string) => {
+				stored = value;
+			};
+			Object.defineProperty(env, name, {
+				get,
+				set,
+				enumerable: false,
+				configurable: true,
+			});
+
+			const result = await ensureLoginShellPath({
+				platform: "darwin",
+				env,
+				userShell: shell,
+			});
+			expect(result).toMatchObject({
+				status: "applied",
+				importedEnv: [name],
+			});
+			expect(stored).toBe(value);
+			expect(Object.getOwnPropertyDescriptor(env, name)).toMatchObject({
+				get,
+				set,
+				enumerable: true,
+			});
+			expect({ ...env }).toHaveProperty(name, value);
+			const child = spawnSync(
+				process.execPath,
+				[
+					"-e",
+					`process.stdout.write(process.env[${JSON.stringify(name)}] ?? "")`,
+				],
+				{ env: { ...env }, encoding: "utf8", timeout: 5_000 },
+			);
+			expect(child.status, child.stderr || String(child.error)).toBe(0);
+			expect(child.stdout).toBe(value);
+		},
+	);
+
+	posixTest(
+		"preserves an explicitly empty proxy from the launcher",
+		async () => {
+			const shell = writeFakeShell(
+				'export HTTPS_PROXY="http://from-shell"; eval "$4"',
+			);
+			const env: NodeJS.ProcessEnv = { ...CLEAN_ENV, HTTPS_PROXY: "" };
+			const result = await ensureLoginShellPath({
+				platform: "darwin",
+				env,
+				userShell: shell,
+			});
+			expect(result).toMatchObject({ status: "applied", importedEnv: [] });
+			expect(env.HTTPS_PROXY).toBe("");
 		},
 	);
 

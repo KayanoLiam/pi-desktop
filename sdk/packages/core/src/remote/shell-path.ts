@@ -339,6 +339,13 @@ export async function ensureLoginShellPath(options?: {
 		for (const [name, value] of Object.entries(resolved.env)) {
 			if (env[name] === undefined) {
 				env[name] = value;
+				// Bun exposes proxy variables absent at startup as non-enumerable
+				// accessors. Assignment alone leaves them out of { ...process.env }
+				// when spawning children. Keep the native getter/setter intact.
+				const descriptor = Object.getOwnPropertyDescriptor(env, name);
+				if (descriptor?.configurable && !descriptor.enumerable) {
+					Object.defineProperty(env, name, { enumerable: true });
+				}
 				importedEnv.push(name);
 			}
 		}
