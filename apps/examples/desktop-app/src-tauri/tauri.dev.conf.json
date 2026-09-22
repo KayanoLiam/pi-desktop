@@ -1,5 +1,5 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "Pi Dev",
-	"identifier": "bot.cline.app.dev"
+	"identifier": "io.github.kayanoliam.pi-desktop.dev"
 }

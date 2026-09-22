@@ -284,10 +284,13 @@ bun tauri icon /tmp/app-icon-macos.png -o /tmp/icons-macos && cp /tmp/icons-maco
 
 ## Customizing the macOS Install Window
 
-> **Not a Pi release workflow yet:** application identifiers, signing/update
-> configuration, and release automation still include upstream Cline values.
-> Do not publish these inherited settings as an independent Pi Desktop release.
-> Use source development until those settings have been migrated and verified.
+> **Not a Pi release workflow yet:** the bundle identifiers are Pi's
+> (`io.github.kayanoliam.pi-desktop`, plus `.dev` / `.beta` / `.nightly`) and
+> the updater endpoints are empty, so a packaged build never polls Cline's
+> feed, but the updater `pubkey`, the `desktop-publish` workflow, and the
+> `publish-desktop` skill are still Cline's. Local packaging (below) is the
+> only verified way to produce a Pi build; don't tag releases from the
+> inherited workflow.
 
 The drag-to-Applications window is configured by `bundle.macOS.dmg` in
 [`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json). Its artwork comes
@@ -436,7 +439,7 @@ Set either `APPLE_CERTIFICATE` or `APPLE_SIGNING_IDENTITY`, plus one notarizatio
 - `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
 - `APPLE_API_KEY` or `APPLE_API_KEY_PATH`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
 
-For local-only macOS testing, use `bun run package:desktop:mac --allow-unsigned-mac`. That ad-hoc signs the `.app` and strips quarantine attributes, but it is not suitable for a downloaded build shared with teammates.
+Without those credentials, use `bun run package:desktop:mac --allow-unsigned-mac`. Tauri then ad-hoc signs the bundle (`APPLE_SIGNING_IDENTITY=-`) so both the `.app` zip and the DMG under `dist/desktop/` (named `*-local-unsigned.*`) carry a signature, but nothing is notarized: on another Mac, Gatekeeper still blocks the download until the user chooses **Open Anyway** under System Settings → Privacy & Security, or runs `xattr -dr com.apple.quarantine "/Applications/Pi.app"`. Say so in the release notes.
 
 ### macOS signing & notarization, step by step
 

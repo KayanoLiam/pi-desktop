@@ -206,11 +206,11 @@ mod tests {
         fs::write(&icon, b"test icon").unwrap();
 
         let bundle =
-            create_dev_application_bundle(&executable, &icon, "bot.cline.app.dev", "Pi Dev")
+            create_dev_application_bundle(&executable, &icon, "io.github.kayanoliam.pi-desktop.dev", "Pi Dev")
                 .unwrap();
         let plist = fs::read_to_string(bundle.join("Contents/Info.plist")).unwrap();
 
-        assert!(plist.contains("<string>bot.cline.app.dev</string>"));
+        assert!(plist.contains("<string>io.github.kayanoliam.pi-desktop.dev</string>"));
         assert!(plist.contains("<string>Pi Dev</string>"));
         assert!(plist.contains(&format!("<string>{DEV_EXECUTABLE_NAME}</string>")));
         assert_eq!(

@@ -233,12 +233,13 @@ const collectMacArtifacts = async (
 	await $`ditto -c -k --keepParent ${appPath} ${zipPath}`;
 
 	const artifacts = [zipPath];
-	if (!suffix) {
-		for (const dmgPath of walkFiles(path.join(BUNDLE_ROOT, "dmg")).filter(
-			(file) => file.endsWith(".dmg"),
-		)) {
-			artifacts.push(copyArtifact(dmgPath, path.basename(dmgPath)));
-		}
+	for (const dmgPath of walkFiles(path.join(BUNDLE_ROOT, "dmg")).filter(
+		(file) => file.endsWith(".dmg"),
+	)) {
+		const dmgName = suffix
+			? path.basename(dmgPath, ".dmg") + `${suffix}.dmg`
+			: path.basename(dmgPath);
+		artifacts.push(copyArtifact(dmgPath, dmgName));
 	}
 
 	return artifacts;
@@ -287,6 +288,17 @@ const main = async () => {
 	assertCanBuildPlatform(platform);
 	if (platform === "mac") {
 		assertMacDistributionReady(allowUnsignedMac);
+	}
+
+	// Without Developer ID credentials, have Tauri ad-hoc sign the bundle
+	// ("-") before it builds the DMG, so the DMG carries the same signature as
+	// the zip below instead of an unsigned app that macOS reports as damaged.
+	const localUnsignedMac =
+		platform === "mac" &&
+		allowUnsignedMac &&
+		!macDistributionCredentialsConfigured();
+	if (localUnsignedMac && !process.env.APPLE_SIGNING_IDENTITY) {
+		process.env.APPLE_SIGNING_IDENTITY = "-";
 	}
 
 	if (!skipBuild) {
