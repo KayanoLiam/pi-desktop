@@ -10,6 +10,13 @@
  *
  * At startup we ask the user's login shell for its PATH and merge it into
  * process.env.PATH, so child processes see the same PATH a terminal would.
+ *
+ * The same launch path also drops the proxy variables a shell profile
+ * exports (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY and their lowercase
+ * twins). Agent processes such as the Pi CLI then connect to model APIs
+ * directly and fail with "fetch failed" from the Dock while the same request
+ * works from a terminal, so those variables are imported alongside PATH —
+ * only when the launching environment did not already set them.
  */
 
 import { spawn } from "node:child_process";
@@ -18,6 +25,25 @@ import { basename, delimiter } from "node:path";
 
 const PATH_MARKER_START = "__CLINE_SIDECAR_PATH_START__";
 const PATH_MARKER_END = "__CLINE_SIDECAR_PATH_END__";
+const ENV_MARKER_START = "__CLINE_SIDECAR_ENV_START__";
+const ENV_MARKER_END = "__CLINE_SIDECAR_ENV_END__";
+
+/**
+ * Variables imported from the login shell besides PATH. Limited to proxy
+ * configuration: it is what a GUI launch loses that changes whether network
+ * requests from spawned agents succeed, and nothing here is a secret worth
+ * keeping out of child processes that would inherit it from a terminal anyway.
+ */
+export const IMPORTED_SHELL_ENV_VARS = [
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"ALL_PROXY",
+	"NO_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"all_proxy",
+	"no_proxy",
+] as const;
 
 /**
  * Kept well under the Tauri shell's 5s endpoint-readiness poll: this
@@ -32,7 +58,7 @@ const SHELL_TIMEOUT_MS = 2_000;
  * (fish would space-join "$PATH") still produce a colon-delimited value; sh
  * reads the PATH environment variable the login shell exported.
  */
-const PRINT_PATH_COMMAND = `/bin/sh -c 'printf "%s%s%s" "${PATH_MARKER_START}" "$PATH" "${PATH_MARKER_END}"'`;
+const PRINT_PATH_COMMAND = `/bin/sh -c 'printf "%s%s%s" "${PATH_MARKER_START}" "$PATH" "${PATH_MARKER_END}"; printf "%s" "${ENV_MARKER_START}"; for v in ${IMPORTED_SHELL_ENV_VARS.join(" ")}; do if printenv "$v" >/dev/null 2>&1; then printf "%s=%s\\n" "$v" "$(printenv "$v")"; fi; done; printf "%s" "${ENV_MARKER_END}"'`;
 
 /**
  * Escape hatch: set CLINE_SIDECAR_SKIP_SHELL_PATH=1 to leave PATH untouched
@@ -113,6 +139,36 @@ export function extractMarkedPath(output: string): string | undefined {
 }
 
 /**
+ * Extract the `NAME=value` lines printed between the env markers. Only names
+ * from IMPORTED_SHELL_ENV_VARS are kept, so a profile that prints its own
+ * `X=Y` noise inside the block cannot inject arbitrary variables.
+ */
+export function extractMarkedEnv(output: string): Record<string, string> {
+	const start = output.indexOf(ENV_MARKER_START);
+	if (start === -1) {
+		return {};
+	}
+	const end = output.indexOf(ENV_MARKER_END, start);
+	if (end === -1) {
+		return {};
+	}
+	const allowed = new Set<string>(IMPORTED_SHELL_ENV_VARS);
+	const result: Record<string, string> = {};
+	for (const line of output
+		.slice(start + ENV_MARKER_START.length, end)
+		.split("\n")) {
+		const separator = line.indexOf("=");
+		if (separator <= 0) continue;
+		const name = line.slice(0, separator);
+		const value = line.slice(separator + 1).trim();
+		if (allowed.has(name) && value.length > 0) {
+			result[name] = value;
+		}
+	}
+	return result;
+}
+
+/**
  * Merge the login shell's PATH with the current one: shell entries first (so
  * profile-managed dirs like /opt/homebrew/bin win), then any current entries
  * the shell PATH doesn't already contain (so explicitly-injected dirs from
@@ -128,19 +184,40 @@ export function mergePaths(shellPath: string, currentPath: string): string {
 	return Array.from(new Set(entries)).join(delimiter);
 }
 
+export interface LoginShellEnvironment {
+	path: string;
+	/** Subset of IMPORTED_SHELL_ENV_VARS the login shell exports. */
+	env: Record<string, string>;
+}
+
 /**
  * Run the user's shell with its profiles sourced and capture its PATH.
  * Resolves to undefined on any failure (missing shell, timeout, profile
  * error) — callers should treat that as "keep the current PATH".
  */
-export function resolveLoginShellPath(
+export async function resolveLoginShellPath(
 	shell: string,
 	timeoutMs = SHELL_TIMEOUT_MS,
 ): Promise<string | undefined> {
+	return (await resolveLoginShellEnvironment(shell, timeoutMs))?.path;
+}
+
+/**
+ * Like resolveLoginShellPath, but also returns the proxy variables the login
+ * shell exports. A shell that cannot produce a PATH yields undefined even if
+ * it printed variables: PATH is the signal that the profile actually ran.
+ */
+export function resolveLoginShellEnvironment(
+	shell: string,
+	timeoutMs = SHELL_TIMEOUT_MS,
+	/** Environment the shell starts from; its profiles layer on top. */
+	spawnEnv: NodeJS.ProcessEnv = process.env,
+): Promise<LoginShellEnvironment | undefined> {
 	return new Promise((resolve) => {
 		const invocation = shellInvocation(shell, PRINT_PATH_COMMAND);
 		const child = spawn(shell, invocation.args, {
 			argv0: invocation.argv0,
+			env: spawnEnv,
 			stdio: ["ignore", "pipe", "ignore"],
 			detached: true,
 		});
@@ -155,7 +232,7 @@ export function resolveLoginShellPath(
 			}
 		};
 		let settled = false;
-		const settle = (value: string | undefined) => {
+		const settle = (value: LoginShellEnvironment | undefined) => {
 			if (settled) {
 				return;
 			}
@@ -187,7 +264,10 @@ export function resolveLoginShellPath(
 			output += data.toString("utf8");
 		});
 		child.on("error", () => settle(undefined));
-		child.on("close", () => settle(extractMarkedPath(output)));
+		child.on("close", () => {
+			const path = extractMarkedPath(output);
+			settle(path ? { path, env: extractMarkedEnv(output) } : undefined);
+		});
 	});
 }
 
@@ -197,10 +277,14 @@ export function resolveLoginShellPath(
  * produce a PATH (exotic shell, broken profile), retry once with the
  * platform default shell before giving up.
  *
+ * Proxy variables the shell exports (IMPORTED_SHELL_ENV_VARS) are copied
+ * into the environment too, but only where the launching environment left
+ * them unset: an explicit value from the launcher always wins.
+ *
  * No-op on Windows (the GUI PATH comes from the registry there) and when
  * CLINE_SIDECAR_SKIP_SHELL_PATH is set. Failures are reported via the
  * returned status but never block startup. The result never contains the
- * resolved PATH itself so it is safe to log verbatim.
+ * resolved PATH or variable values, only names, so it is safe to log.
  */
 export async function ensureLoginShellPath(options?: {
 	platform?: NodeJS.Platform;
@@ -211,7 +295,13 @@ export async function ensureLoginShellPath(options?: {
 	/** Test seam: overrides the platform-default fallback shell. */
 	fallbackShell?: string;
 }): Promise<
-	| { status: "applied"; pathEntries: number; shell: string }
+	| {
+			status: "applied";
+			pathEntries: number;
+			shell: string;
+			/** Names of the proxy variables imported from the shell. */
+			importedEnv: string[];
+	  }
 	| { status: "skipped"; reason: string }
 	| { status: "failed"; shell: string }
 > {
@@ -239,16 +329,24 @@ export async function ensureLoginShellPath(options?: {
 				];
 
 	for (const [shell, timeoutMs] of attempts) {
-		const shellPath = await resolveLoginShellPath(shell, timeoutMs);
-		if (!shellPath) {
+		const resolved = await resolveLoginShellEnvironment(shell, timeoutMs, env);
+		if (!resolved) {
 			continue;
 		}
-		const merged = mergePaths(shellPath, env.PATH ?? "");
+		const merged = mergePaths(resolved.path, env.PATH ?? "");
 		env.PATH = merged;
+		const importedEnv: string[] = [];
+		for (const [name, value] of Object.entries(resolved.env)) {
+			if (env[name] === undefined) {
+				env[name] = value;
+				importedEnv.push(name);
+			}
+		}
 		return {
 			status: "applied",
 			pathEntries: merged.split(delimiter).length,
 			shell,
+			importedEnv,
 		};
 	}
 	return { status: "failed", shell: userShell };

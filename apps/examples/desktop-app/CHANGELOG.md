@@ -14,6 +14,7 @@ First public beta of **Pi**, a native desktop app for the [Pi](https://github.co
 - Pi's slash commands: typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace
 - Your configured Pi models, filtered by `enabledModels`, with per-provider model memory and per-model thinking levels
 - Light and dark themes, a local-first entry screen, no account or sign-in
+- Proxy settings from your shell profile (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are picked up when the app is launched from the Dock, so Pi reaches model APIs the same way it does from a terminal
 
 **Install (macOS, Apple Silicon)**
 

@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	defaultShellFor,
 	ensureLoginShellPath,
+	extractMarkedEnv,
 	extractMarkedPath,
 	loginShellFor,
 	mergePaths,
+	resolveLoginShellEnvironment,
 	resolveLoginShellPath,
 	shellInvocation,
 } from "./shell-path";
@@ -17,6 +19,10 @@ const posixTest = it.skipIf(isWindows);
 
 const MARKER_START = "__CLINE_SIDECAR_PATH_START__";
 const MARKER_END = "__CLINE_SIDECAR_PATH_END__";
+const ENV_START = "__CLINE_SIDECAR_ENV_START__";
+const ENV_END = "__CLINE_SIDECAR_ENV_END__";
+/** The host's own proxy variables must not leak into the fake shells. */
+const CLEAN_ENV: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" };
 
 let tempDirs: string[] = [];
 
@@ -62,6 +68,21 @@ describe("extractMarkedPath", () => {
 		expect(extractMarkedPath("no markers here")).toBeUndefined();
 		expect(extractMarkedPath(`${MARKER_START}${MARKER_END}`)).toBeUndefined();
 		expect(extractMarkedPath(`${MARKER_START}/usr/bin`)).toBeUndefined();
+	});
+});
+
+describe("extractMarkedEnv", () => {
+	it("keeps only known proxy variables from the marked block", () => {
+		const output = `banner\n${ENV_START}HTTPS_PROXY=http://127.0.0.1:7890\nno_proxy=localhost,127.0.0.1\nSECRET=x\nbroken line\n=novalue\n${ENV_END}trailing`;
+		expect(extractMarkedEnv(output)).toEqual({
+			HTTPS_PROXY: "http://127.0.0.1:7890",
+			no_proxy: "localhost,127.0.0.1",
+		});
+	});
+
+	it("returns nothing without markers", () => {
+		expect(extractMarkedEnv("HTTPS_PROXY=http://x")).toEqual({});
+		expect(extractMarkedEnv(`${ENV_START}HTTPS_PROXY=http://x`)).toEqual({});
 	});
 });
 
@@ -185,6 +206,32 @@ describe.skipIf(isWindows)("resolveLoginShellPath", () => {
 	});
 });
 
+describe.skipIf(isWindows)("resolveLoginShellEnvironment", () => {
+	it("captures exported proxy variables next to PATH", async () => {
+		const shell = writeFakeShell(
+			'PATH="/opt/homebrew/bin:/usr/bin"; export HTTPS_PROXY="http://127.0.0.1:7890"; export no_proxy="localhost"; eval "$4"',
+		);
+		await expect(
+			resolveLoginShellEnvironment(shell, undefined, CLEAN_ENV),
+		).resolves.toEqual({
+			path: "/opt/homebrew/bin:/usr/bin",
+			env: { HTTPS_PROXY: "http://127.0.0.1:7890", no_proxy: "localhost" },
+		});
+	});
+
+	it("ignores proxy variables the shell only sets without exporting", async () => {
+		const shell = writeFakeShell(
+			'PATH="/usr/bin"; HTTPS_PROXY="http://unexported"; eval "$4"',
+		);
+		await expect(
+			resolveLoginShellEnvironment(shell, undefined, CLEAN_ENV),
+		).resolves.toEqual({
+			path: "/usr/bin",
+			env: {},
+		});
+	});
+});
+
 describe("ensureLoginShellPath", () => {
 	posixTest("merges the login shell PATH into env.PATH", async () => {
 		const shell = writeFakeShell();
@@ -198,6 +245,7 @@ describe("ensureLoginShellPath", () => {
 			status: "applied",
 			pathEntries: 3,
 			shell,
+			importedEnv: [],
 		});
 		expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/bin");
 	});
@@ -216,6 +264,30 @@ describe("ensureLoginShellPath", () => {
 			expect(result.status).toBe("applied");
 			expect(result).toMatchObject({ shell: fallbackShell });
 			expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+		},
+	);
+
+	posixTest(
+		"imports exported proxy variables the launcher did not set",
+		async () => {
+			const shell = writeFakeShell(
+				'PATH="/usr/bin"; export HTTPS_PROXY="http://127.0.0.1:7890"; export http_proxy="http://from-shell"; eval "$4"',
+			);
+			const env: NodeJS.ProcessEnv = {
+				PATH: "/usr/bin",
+				http_proxy: "http://from-launcher",
+			};
+			const result = await ensureLoginShellPath({
+				platform: "darwin",
+				env,
+				userShell: shell,
+			});
+			expect(result).toMatchObject({
+				status: "applied",
+				importedEnv: ["HTTPS_PROXY"],
+			});
+			expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7890");
+			expect(env.http_proxy).toBe("http://from-launcher");
 		},
 	);
 
