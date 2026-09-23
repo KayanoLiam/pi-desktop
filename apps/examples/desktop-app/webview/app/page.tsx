@@ -82,6 +82,11 @@ import {
 	isUnsupportedImageAttachment,
 } from "@/lib/image-attachments";
 import { createLatestSuccessfulRequestGate } from "@/lib/latest-successful-request";
+import {
+	type PiCommandHandled,
+	routePiCommandUiAction,
+	shouldDeferComposerSideEffects,
+} from "@/lib/pi-slash-command";
 import { requestPromptInputFocus } from "@/lib/prompt-input-focus";
 import {
 	fetchProviderCatalog,
@@ -881,6 +886,8 @@ export default function Home() {
 											onOpenAccountSettings={() =>
 												handleSettingsSectionChange("API Providers")
 											}
+											onOpenSettings={() => handleViewChange("settings")}
+											onOpenSessionSearch={() => setCommandBarOpen(true)}
 											parentSession={activeParentSession}
 											onThreadStarted={handleThreadStarted}
 										/>
@@ -944,6 +951,8 @@ function ChatThreadPane({
 	onOpenSessionById,
 	onOpenModelSettings,
 	onOpenAccountSettings,
+	onOpenSettings,
+	onOpenSessionSearch,
 	onPickRemoteWorkspaceDirectory,
 	onSelectEnvironment,
 	parentSession,
@@ -980,6 +989,8 @@ function ChatThreadPane({
 	onSelectEnvironment: (environmentId: string) => Promise<void>;
 	onOpenModelSettings?: () => void;
 	onOpenAccountSettings?: () => void;
+	onOpenSettings?: () => void;
+	onOpenSessionSearch?: () => void;
 	parentSession?: { sessionId: string; title?: string };
 	remoteEnvironment: RemoteWorkspaceEnvironment | null;
 	onThreadStarted?: (threadId: string) => void;
@@ -993,6 +1004,8 @@ function ChatThreadPane({
 		isCloudSessionExpired,
 		activeAssistantMessageId,
 		activityLabel,
+		piCommandPending,
+		piCommandNotice,
 		config,
 		messages,
 		error,
@@ -1693,6 +1706,18 @@ function ChatThreadPane({
 		[isCloudSession, setPendingAttachments],
 	);
 
+	const [modelPickerRequest, setModelPickerRequest] = useState(0);
+	const routePiUiAction = useCallback(
+		(action: PiCommandHandled["uiAction"]) => {
+			routePiCommandUiAction(action, {
+				onNew: onNewThread,
+				onModel: () => setModelPickerRequest((current) => current + 1),
+				onSettings: onOpenSettings,
+				onResume: onOpenSessionSearch,
+			});
+		},
+		[onNewThread, onOpenSessionSearch, onOpenSettings],
+	);
 	const handleSend = useCallback(
 		async (prompt: string) => {
 			const trimmed = prompt.trim();
@@ -1702,31 +1727,65 @@ function ChatThreadPane({
 			if (isCloudSession && !sessionId && !config.repoUrl?.trim()) {
 				return;
 			}
-			onThreadStarted?.(threadId);
+			const piSlash = shouldDeferComposerSideEffects(isPiThread, trimmed);
+			if (!piSlash) {
+				onThreadStarted?.(threadId);
+			}
 			// Also clear the injected draft: the composer cleared its local copy,
 			// but a stale non-empty draft would repopulate the input if the
 			// composer remounts (e.g. a transport blip re-showing the loader).
 			setPromptInput("");
 			const toSend = [...pendingAttachments];
-			setPendingAttachments([]);
+			// Pi slash commands are resolved before attachments are consumed.
+			if (!piSlash) {
+				setPendingAttachments([]);
+			}
+			const handled: { current: PiCommandHandled | null } = {
+				current: null,
+			};
 			const promptTaken = await sendPrompt(trimmed, toSend, {
 				inNewWorktree: workIn === "worktree" && isNewThread,
+				piRuntime: isPiThread,
+				onPiCommand: (result) => {
+					handled.current = result;
+				},
 			});
+			const piCommand = handled.current;
+			if (piCommand) {
+				if (piCommand.sessionTitle && sessionId) {
+					setManualTitle(piCommand.sessionTitle);
+					onUpdateSessionMetadata?.(sessionId, {
+						...(historySession?.metadata ?? {}),
+						title: piCommand.sessionTitle,
+					});
+				}
+				routePiUiAction(piCommand.uiAction);
+				return;
+			}
 			// The prompt never reached the runtime (e.g. the provider connection
 			// failed): hand it back so the user can fix the provider and resend
 			// without retyping. Leave anything they typed meanwhile alone.
 			if (!promptTaken && promptInputRef.current.trim() === "") {
 				setPromptInput(trimmed);
-				handleAttachFiles(toSend);
+				if (!piSlash) handleAttachFiles(toSend);
+				return;
+			}
+			if (piSlash && promptTaken) {
+				onThreadStarted?.(threadId);
+				setPendingAttachments([]);
 			}
 		},
 		[
 			config.repoUrl,
 			handleAttachFiles,
+			historySession?.metadata,
 			isCloudSession,
 			isNewThread,
+			isPiThread,
 			onThreadStarted,
+			onUpdateSessionMetadata,
 			pendingAttachments,
+			routePiUiAction,
 			sendPrompt,
 			sessionId,
 			setPendingAttachments,
@@ -2252,6 +2311,9 @@ function ChatThreadPane({
 			onModeToggle={handleModeToggle}
 			onPromptInputChange={handlePromptInputChange}
 			onOpenModelSettings={onOpenModelSettings}
+			piCommandPending={piCommandPending}
+			piCommandNotice={piCommandNotice}
+			modelPickerRequest={modelPickerRequest}
 			onReasoningChange={handleReasoningChange}
 			onSteerPromptInQueue={steerPromptInQueue}
 			onEditPromptInQueue={updatePromptInQueue}

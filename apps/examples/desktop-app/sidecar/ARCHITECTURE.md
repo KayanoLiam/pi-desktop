@@ -80,7 +80,7 @@ reaped after 10 minutes and recreated transparently on the next send.
 
 `pi-config-watcher.ts` compares a stat signature of `settings.json`,
 `models.json`, `auth.json`, `npm/`, `git/` and `extensions/`; on change it marks
-live processes stale (restart after their run), clears the slash-command cache,
+live processes stale (restart after their run or compaction), clears the slash-command cache,
 and broadcasts `pi_config_changed` so the webview reloads its catalog.
 
 ### 1. Chat Sessions — Shared Hub Client
@@ -213,7 +213,8 @@ Supported commands:
 |---------|---------------|
 | `chat_session_command` | Pi threads → `PiSessionManager`; else shared Hub through `ClineCore`; cloud sessions route to `CloudSessionManager` |
 | `list_pi_model_catalog` | `listPiModelCatalog()` (Pi config + installed-Pi RPC discovery) |
-| `list_pi_commands` | `PiSessionManager.listCommands()` (`get_commands` from the live or a discovery Pi process) |
+| `list_pi_commands` | `PiSessionManager.listCommands()` (`get_commands` from the live or a discovery Pi process, plus bare builtin names; builtins win name collisions and remain if discovery fails) |
+| `execute_pi_command` | `PiSessionManager.executeCommand()` — known Pi builtins (`/compact`, `/name`, `/session`, `/export` HTML, desktop uiActions). Unknown/extension/prompt/skill text returns `handled: false`. Terminal-only builtins return guidance and are not sent to the model. |
 | `list_provider_catalog` | `ProviderSettingsManager` + `listLocalProviders` |
 | `list_provider_models` | `getLocalProviderModels` |
 | `save_voice_input_settings` | validates and persists the selected transcription provider/model |

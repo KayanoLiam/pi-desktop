@@ -5,14 +5,16 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSidecarContext } from "../context";
 import type { SidecarContext, SidecarWebSocketClient } from "../types";
 import { PI_DESKTOP_APPROVAL_TITLE } from "./pi-desktop-gate-extension";
 import { PiSessionFiles } from "./pi-session-files";
 import { PiSessionManager } from "./pi-session-manager";
+import { PI_BUILTIN_SLASH_COMMANDS } from "./pi-slash-commands";
 import {
 	createFakePi,
 	type FakePi,
@@ -46,12 +48,16 @@ function events(name: string): Array<Record<string, unknown>> {
 		.map((event) => event.payload);
 }
 
-function createManager(scenario: Parameters<typeof createFakePi>[1] = {}) {
+function createManager(
+	scenario: Parameters<typeof createFakePi>[1] = {},
+	options: { compactTimeoutMs?: number } = {},
+) {
 	fake = createFakePi(join(dir, "fake"), scenario);
 	manager = new PiSessionManager(ctx, {
 		files: new PiSessionFiles(() => agentDir),
 		binary: fake.bin,
 		reapIntervalMs: 0,
+		compactTimeoutMs: options.compactTimeoutMs,
 		gateExtensionPath: () => join(dir, "gate.js"),
 		env: () => ({
 			...process.env,
@@ -583,6 +589,7 @@ describe("PiSessionManager", () => {
 			],
 		});
 		expect(await manager.listCommands(dir)).toEqual([
+			...PI_BUILTIN_SLASH_COMMANDS,
 			{ name: "review", description: "Review code", source: "extension" },
 			{ name: "skill:brave", description: undefined, source: "skill" },
 		]);
@@ -609,7 +616,352 @@ describe("PiSessionManager", () => {
 		await waitFor(() => !manager.isLive("s-stale"));
 		expect(manager.isLive("s-stale")).toBe(false);
 	});
+
+	it("keeps bare builtins when discovery fails and lets builtins win name collisions", async () => {
+		createManager({ commandsError: "discovery down" });
+		const fallback = await manager.listCommands(dir);
+		expect(fallback.map((command) => command.name)).toEqual(
+			PI_BUILTIN_SLASH_COMMANDS.map((command) => command.name),
+		);
+		expect(fallback.every((command) => !command.name.startsWith("/"))).toBe(
+			true,
+		);
+		expect(fallback.find((command) => command.name === "compact")).toEqual(
+			expect.objectContaining({ source: "builtin" }),
+		);
+		fake.setScenario({
+			commands: [
+				{
+					name: "review",
+					description: "Review code",
+					source: "extension",
+					sourceInfo: {},
+				},
+			],
+		});
+		expect(
+			(await manager.listCommands(dir)).some(
+				(command) =>
+					command.name === "review" && command.source === "extension",
+			),
+		).toBe(true);
+
+		await manager.dispose();
+		createManager({
+			commands: [
+				{
+					name: "compact",
+					description: "extension compact",
+					source: "extension",
+					sourceInfo: {},
+				},
+				{
+					name: "bug",
+					description: "extension bug",
+					source: "extension",
+					sourceInfo: {},
+				},
+				{
+					name: "/review",
+					description: "slashed",
+					source: "extension",
+					sourceInfo: {},
+				},
+				{ name: "compact:2", source: "extension", sourceInfo: {} },
+				{ name: "skill:compact", source: "skill", sourceInfo: {} },
+			],
+		});
+		const listed = await manager.listCommands(dir);
+		for (const name of ["compact", "bug"]) {
+			expect(listed.find((command) => command.name === name)?.source).toBe(
+				"builtin",
+			);
+			expect(
+				listed.some(
+					(command) => command.name === name && command.source === "extension",
+				),
+			).toBe(false);
+		}
+		expect(listed.map((command) => command.name)).toEqual(
+			expect.arrayContaining(["review", "compact:2", "skill:compact"]),
+		);
+	});
+
+	it("compacts an idle session with custom instructions and does not invent a user turn", async () => {
+		createManager();
+		await startPi(manager, "s-compact");
+		const result = await manager.executeCommand({
+			sessionId: "s-compact",
+			text: "/compact focus on auth and tests",
+		});
+		expect(result).toEqual({
+			handled: true,
+			refresh: true,
+			message: expect.stringContaining("Compacted the session."),
+		});
+		expect(result).toEqual({
+			handled: true,
+			refresh: true,
+			message: expect.stringContaining("focus on auth and tests"),
+		});
+		expect(rpcTypes()).toContain("compact");
+		expect(rpcTypes()).not.toContain("prompt");
+		expect(
+			fake.received().find((line) => line.type === "compact"),
+		).toMatchObject({
+			type: "compact",
+			customInstructions: "focus on auth and tests",
+		});
+		expect(chunks("chat_queued_prompt_start")).toEqual([]);
+		expect(chunks("chat_done")).toEqual([]);
+		expect(events("chat_session_ended")).toEqual([]);
+		expect(manager.status("s-compact")).toBe("idle");
+	});
+
+	it("rejects compaction while busy and when Pi reports an error", async () => {
+		createManager({
+			promptEvents: [{ __waitForUi__: true }],
+			compactError: "Nothing to compact (session too small)",
+		});
+		await startPi(manager, "s-busy");
+		const pending = manager.handle({
+			action: "send",
+			sessionId: "s-busy",
+			prompt: "hello",
+		});
+		await waitFor(() => manager.status("s-busy") === "running");
+		await expect(
+			manager.executeCommand({ sessionId: "s-busy", text: "/compact" }),
+		).rejects.toThrow(/busy/i);
+		expect(rpcTypes()).not.toContain("compact");
+		await manager.handle({ action: "abort", sessionId: "s-busy" });
+		await pending;
+
+		await expect(
+			manager.executeCommand({ sessionId: "s-busy", text: "/compact" }),
+		).rejects.toThrow("Nothing to compact (session too small)");
+		expect(manager.status("s-busy")).toBe("idle");
+		expect(chunks("chat_queued_prompt_start")).toEqual([]);
+	});
+
+	it("aborts a compaction that exceeds the RPC timeout", async () => {
+		createManager({ compactDelayMs: 500 }, { compactTimeoutMs: 40 });
+		await startPi(manager, "s-timeout");
+		await expect(
+			manager.executeCommand({ sessionId: "s-timeout", text: "/compact" }),
+		).rejects.toThrow(/Compaction timed out after 40ms/);
+		expect(rpcTypes()).toContain("abort");
+		expect(manager.isLive("s-timeout")).toBe(false);
+		expect(manager.status("s-timeout")).toBeUndefined();
+		await expect(
+			manager.handle({
+				action: "send",
+				sessionId: "s-timeout",
+				prompt: "/compact later",
+			}),
+		).rejects.toThrow(/execute_pi_command/);
+	});
+
+	it("terminates a stale process after compaction rather than on the next turn", async () => {
+		createManager({ compactDelayMs: 120 });
+		await startPi(manager, "s-stale-compact");
+		const pending = manager.executeCommand({
+			sessionId: "s-stale-compact",
+			text: "/compact",
+		});
+		await waitFor(() => rpcTypes().includes("compact"));
+		manager.markStale();
+		expect(manager.isLive("s-stale-compact")).toBe(true);
+		await expect(pending).resolves.toMatchObject({
+			handled: true,
+			refresh: true,
+		});
+		await waitFor(() => !manager.isLive("s-stale-compact"));
+	});
+
+	it("reports cancellations and stopped compactions clearly", async () => {
+		createManager({ compactDelayMs: 500 });
+		await startPi(manager, "s-cancel-compact");
+		const pending = manager.executeCommand({
+			sessionId: "s-cancel-compact",
+			text: "/compact",
+		});
+		const cancelled = expect(pending).rejects.toThrow(
+			/Compaction was cancelled/,
+		);
+		await waitFor(() => rpcTypes().includes("compact"));
+		await manager.handle({ action: "abort", sessionId: "s-cancel-compact" });
+		await cancelled;
+		expect(manager.status("s-cancel-compact")).toBe("idle");
+
+		await manager.dispose();
+		createManager({ compactDelayMs: 500 });
+		await startPi(manager, "s-stop-compact");
+		const stopped = manager.executeCommand({
+			sessionId: "s-stop-compact",
+			text: "/compact",
+		});
+		const stopError = expect(stopped).rejects.toThrow(/Pi session closed/);
+		await waitFor(() => rpcTypes().includes("compact"));
+		await manager.handle({ action: "stop", sessionId: "s-stop-compact" });
+		await stopError;
+	});
+
+	it("sets and shows a session name, reports stats, and exports HTML without overwriting the session", async () => {
+		createManager();
+		await startPi(manager, "s-meta");
+		expect(
+			await manager.executeCommand({ sessionId: "s-meta", text: "/name" }),
+		).toEqual({
+			handled: true,
+			message: "Usage: /name <name>. This session has no display name.",
+		});
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-meta",
+				text: "/name Auth refactor",
+			}),
+		).toEqual({
+			handled: true,
+			refresh: true,
+			message: "Session name set to Auth refactor.",
+		});
+		const info = await manager.executeCommand({
+			sessionId: "s-meta",
+			text: "/session",
+		});
+		expect(info).toMatchObject({ handled: true });
+		if (!info.handled) throw new Error("session command was not handled");
+		expect(info.message).toContain("Name: Auth refactor");
+		expect(info.message).toContain("Messages: 2 total");
+		expect(info.message).toContain("Tokens: 7 total");
+		expect("refresh" in info).toBe(false);
+
+		const exported = await manager.executeCommand({
+			sessionId: "s-meta",
+			text: '/export "out file.html"',
+		});
+		expect(exported).toEqual({
+			handled: true,
+			message: "Exported the session to HTML: out file.html",
+		});
+		expect(
+			fake.received().find((line) => line.type === "export_html"),
+		).toMatchObject({ outputPath: "out file.html" });
+
+		const liveFile = `${dir}/sessions/s-meta.jsonl`;
+		for (const path of [liveFile, pathToFileURL(liveFile).href]) {
+			await expect(
+				manager.executeCommand({
+					sessionId: "s-meta",
+					text: `/export ${path}`,
+				}),
+			).rejects.toThrow(/active Pi session file/);
+		}
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-meta",
+				text: "/export notes.jsonl",
+			}),
+		).toMatchObject({
+			handled: true,
+			message: expect.stringContaining("Nothing was written"),
+		});
+		expect(
+			fake.received().filter((line) => line.type === "export_html"),
+		).toHaveLength(1);
+	});
+
+	it("normalizes tilde paths before guarding the active session export", async () => {
+		const homeSession = join(homedir(), "sessions", "s-home.jsonl");
+		createManager({ state: { sessionFile: homeSession } });
+		await startPi(manager, "s-home");
+		await expect(
+			manager.executeCommand({
+				sessionId: "s-home",
+				text: "/export ~/sessions/s-home.jsonl",
+			}),
+		).rejects.toThrow(/active Pi session file/);
+		expect(rpcTypes()).not.toContain("export_html");
+	});
+
+	it("dispatches desktop controls, leaves extensions alone, and does not claim unsupported commands", async () => {
+		createManager({
+			commands: [
+				{ name: "review", description: "Review", source: "extension" },
+				{ name: "compact", description: "ext", source: "extension" },
+			],
+		});
+		expect(await manager.executeCommand({ text: "/review the diff" })).toEqual({
+			handled: false,
+		});
+		expect(await manager.executeCommand({ text: "/compact:2" })).toEqual({
+			handled: false,
+		});
+		expect(await manager.executeCommand({ text: "/new" })).toEqual({
+			handled: true,
+			uiAction: "new",
+			message: "Starting a new session.",
+		});
+		expect(
+			await manager.executeCommand({ text: "/model openai/gpt" }),
+		).toMatchObject({ handled: true, uiAction: "model" });
+		expect(await manager.executeCommand({ text: "/settings" })).toMatchObject({
+			uiAction: "settings",
+		});
+		expect(await manager.executeCommand({ text: "/resume" })).toMatchObject({
+			uiAction: "resume",
+		});
+		await expect(manager.executeCommand({ text: "/fork" })).rejects.toThrow(
+			/active Pi session is required/,
+		);
+		expect(
+			await manager.executeCommand({ sessionId: "s-1", text: "/fork" }),
+		).toMatchObject({
+			handled: true,
+			uiAction: "fork",
+			message: expect.stringContaining("not forked"),
+		});
+		expect(await manager.executeCommand({ text: "/clone" })).toMatchObject({
+			handled: true,
+			message: expect.stringContaining("Nothing was duplicated"),
+		});
+		const reload = await manager.executeCommand({ text: "/reload" });
+		expect(reload).toMatchObject({ handled: true });
+		if (!reload.handled) throw new Error("reload was not handled");
+		expect(reload.message).toMatch(/not available/i);
+		expect(reload.message).not.toMatch(/reloaded/i);
+		expect("uiAction" in reload).toBe(false);
+		const imported = await manager.executeCommand({ text: "/import a.jsonl" });
+		if (!imported.handled) throw new Error("import was not handled");
+		expect(imported.message).toMatch(/Nothing was imported/);
+		const shared = await manager.executeCommand({ text: "/share" });
+		if (!shared.handled) throw new Error("share was not handled");
+		expect(shared.message).toMatch(/does not share or upload/);
+		expect(rpcTypes()).not.toContain("prompt");
+	});
 });
+
+async function startPi(target: PiSessionManager, sessionId: string) {
+	await target.handle({
+		action: "start",
+		config: {
+			runtime: "pi",
+			sessionId,
+			provider: "p",
+			model: "m",
+			cwd: dir,
+			workspaceRoot: dir,
+		},
+	});
+}
+
+function rpcTypes(): string[] {
+	return fake
+		.received()
+		.map((line) => line.type)
+		.filter((type): type is string => typeof type === "string");
+}
 
 async function waitFor(
 	predicate: () => boolean,

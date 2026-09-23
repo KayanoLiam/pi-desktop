@@ -58,7 +58,8 @@ this path; `sidecar/ARCHITECTURE.md` describes the design. In short:
   `chat_usage`, `chat_done`, `chat_queued_prompt_start`, `chat_session_status`,
   `chat_session_ended`, `prompts_in_queue_state`. A blocking `send` resolves at
   Pi's `agent_settled` with the same result shape the Cline path returns, so
-  `use-chat-session.ts` is unchanged apart from carrying `runtime`.
+  `use-chat-session.ts` carries `runtime` and, for Pi slash input, calls
+  `execute_pi_command` before any optimistic chat turn.
 - Pi has no built-in tool approval. The sidecar writes a small `tool_call`
   hook extension to `~/.cline/data/pi-desktop/extensions/` (content-addressed)
   and loads it into every Pi process. It asks through `ctx.ui.confirm` with a
@@ -81,7 +82,8 @@ this path; `sidecar/ARCHITECTURE.md` describes the design. In short:
   delete removes the file. Pinning is stored desktop-side in
   `~/.cline/data/pi-desktop/session-metadata.json`.
 - Slash commands come from Pi (`get_commands`): extension commands, prompt
-  templates and skills, per workspace, cached for five minutes. A stat
+  templates and skills, per workspace, cached for five minutes. Builtin names
+  stay listed if that discovery fails. A stat
   signature of `settings.json`, `models.json`, `auth.json`, `npm/`, `git/` and
   `extensions/` is checked on file events and every five seconds; a change
   marks live Pi processes stale (restarted after their current run), clears
@@ -92,6 +94,26 @@ this path; `sidecar/ARCHITECTURE.md` describes the design. In short:
 credentials.** RPC mode shows no project-trust prompt; project-local `.pi`
 resources follow Pi's saved trust decisions and `defaultProjectTrust`, and the
 desktop never passes `--approve`. None of this is a sandbox.
+
+Pi slash commands (webview, against installed Pi 0.87.0): submitting text
+that starts with `/` on a Pi thread calls `execute_pi_command` before a chat
+turn or attachment clear. Pi matches builtin names before extension commands
+and hides colliding extension names from autocomplete; the menu follows that,
+so an extension named `compact` does not replace `/compact`. A handled command
+is not sent to the model. `refresh: true` reloads the open transcript and asks
+the sidebar to refresh metadata; it does not start a desktop chat turn.
+`/compact` is that path (Pi may still call a model inside its own compact RPC).
+`/new`, `/model`, `/settings`, and `/resume` do not require a live Pi process:
+they open the new-thread action, the model picker, desktop Settings, and session
+search. Those are not Pi's full TUI pickers. `/fork` stays guidance — desktop
+fork is disabled for Pi threads and is not Pi's message picker. `/name` updates
+the session title, `/session` shows statistics, and `/export` writes HTML when
+Pi can export; JSONL export is not available. Other builtins such as `/clone`,
+`/tree`, and `/share` show guidance instead of running or uploading anything.
+The static fallback menu does not advertise clone/tree. Extension, skill, and
+prompt commands that the endpoint reports as unhandled still follow the normal
+prompt path. A transport error keeps the draft and attachments. A handled
+command clears only the command text.
 
 Not supported for Pi threads yet: fork, editing an earlier message, file
 checkpoints, editing or removing one queued message (only stop-and-resend), and

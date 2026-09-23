@@ -8,11 +8,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { KNOWN_PI_BUILTIN_COMMANDS } from "../webview/lib/pi-slash-command";
 import { handleCommand } from "./commands";
 import { createSidecarContext } from "./context";
 import { PiSessionFiles } from "./pi/pi-session-files";
 import { PiSessionManager } from "./pi/pi-session-manager";
 import { PiSessionMetadataStore } from "./pi/pi-session-metadata";
+import { PI_BUILTIN_SLASH_COMMANDS } from "./pi/pi-slash-commands";
 import { createFakePi, type FakePi } from "./pi/test-helpers/fake-pi";
 import type { SidecarContext } from "./types";
 
@@ -351,14 +353,119 @@ describe("Pi thread command routing", () => {
 		]);
 	});
 
+	it("keeps the frontend and backend builtin guards in sync", () => {
+		expect(
+			new Set(PI_BUILTIN_SLASH_COMMANDS.map((command) => command.name)),
+		).toEqual(new Set(KNOWN_PI_BUILTIN_COMMANDS));
+	});
+
 	it("exposes Pi's slash commands per workspace", async () => {
 		expect(
 			await handleCommand(ctx, "list_pi_commands", { workspaceRoot: dir }),
 		).toEqual({
 			commands: [
+				...PI_BUILTIN_SLASH_COMMANDS,
 				{ name: "review", description: "Review", source: "extension" },
 			],
 		});
+	});
+
+	it("executes Pi builtins through execute_pi_command and keeps the send path closed", async () => {
+		expect(
+			await handleCommand(ctx, "execute_pi_command", { text: "/review" }),
+		).toEqual({ handled: false });
+		expect(
+			await handleCommand(ctx, "execute_pi_command", { text: "/new" }),
+		).toMatchObject({ handled: true, uiAction: "new" });
+		await expect(
+			handleCommand(ctx, "execute_pi_command", { text: "/compact" }),
+		).rejects.toThrow(/active Pi session is required/);
+		await expect(
+			handleCommand(ctx, "execute_pi_command", { text: "   " }),
+		).rejects.toThrow(/text is required/);
+
+		const started = (await handleCommand(ctx, "chat_session_command", {
+			request: {
+				action: "start",
+				config: {
+					runtime: "pi",
+					sessionId: "pi-cmd",
+					environmentId: "local",
+					provider: "p",
+					model: "m",
+					workspaceRoot: dir,
+					cwd: dir,
+				},
+			},
+		})) as { sessionId: string };
+		expect(started.sessionId).toBe("pi-cmd");
+		expect(
+			await handleCommand(ctx, "execute_pi_command", {
+				sessionId: "pi-cmd",
+				text: "/compact keep the auth decision",
+			}),
+		).toMatchObject({
+			handled: true,
+			refresh: true,
+			message: expect.stringContaining("keep the auth decision"),
+		});
+		for (const builtin of ["/session", "/bug report this issue"]) {
+			await expect(
+				handleCommand(ctx, "chat_session_command", {
+					request: {
+						action: "send",
+						sessionId: "pi-cmd",
+						prompt: builtin,
+						config: { runtime: "pi", environmentId: "local" },
+					},
+				}),
+			).rejects.toThrow(/execute_pi_command/);
+		}
+		expect(fake.received().some((line) => line.type === "prompt")).toBe(false);
+		const bug = (await handleCommand(ctx, "execute_pi_command", {
+			sessionId: "pi-cmd",
+			text: "/bug report this issue",
+		})) as { handled: boolean; message: string };
+		expect(bug).toMatchObject({
+			handled: true,
+			message: expect.stringContaining("Nothing was reported or uploaded"),
+		});
+		const info = (await handleCommand(ctx, "execute_pi_command", {
+			sessionId: "pi-cmd",
+			text: "/session",
+		})) as { handled: boolean; message: string };
+		expect(info.handled).toBe(true);
+		expect(info.message).toContain("Messages:");
+		const reload = (await handleCommand(ctx, "execute_pi_command", {
+			text: "/reload",
+		})) as { handled: boolean; message: string; uiAction?: string };
+		expect(reload.handled).toBe(true);
+		expect(reload.uiAction).toBeUndefined();
+		expect(reload.message).toMatch(/not available/i);
+	});
+
+	it("rejects Pi commands for non-Pi or remote sessions", async () => {
+		writePiSession("pi-owned", dir);
+		await expect(
+			handleCommand(ctx, "execute_pi_command", {
+				sessionId: "cline-session",
+				text: "/name Wrong owner",
+			}),
+		).rejects.toThrow(/local Pi session/);
+		await expect(
+			handleCommand(ctx, "execute_pi_command", {
+				sessionId: "pi-owned",
+				environmentId: "ssh-host",
+				text: "/compact",
+			}),
+		).rejects.toThrow(/local Pi session/);
+		await expect(
+			handleCommand(ctx, "execute_pi_command", {
+				environmentId: "cloud",
+				text: "/new",
+			}),
+		).rejects.toThrow(/local Pi session/);
+		expect(fake.received()).toEqual([]);
 	});
 
 	it("keeps remote environments on the Cline runtime", async () => {

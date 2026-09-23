@@ -60,6 +60,14 @@ import {
 	readModelSelectionStorageFromWindow,
 	writeModelSelectionStorageToWindow,
 } from "@/lib/model-selection";
+import {
+	isKnownPiBuiltin,
+	isPiSlashInput,
+	mergePiSlashCommands,
+	PI_SLASH_COMMAND_FALLBACK,
+	type PiSlashCommandInfo,
+	piSlashCommandName,
+} from "@/lib/pi-slash-command";
 import { subscribeToPromptInputFocus } from "@/lib/prompt-input-focus";
 import { normalizeProviderId } from "@/lib/provider-id";
 import {
@@ -102,39 +110,7 @@ type SlashCommand = {
 	description?: string;
 };
 
-type PiSlashCommand = {
-	name: string;
-	description?: string;
-	source: "extension" | "prompt" | "skill";
-};
-
-const PI_SLASH_SOURCE_LABELS: Record<PiSlashCommand["source"], string> = {
-	extension: "Extension command",
-	prompt: "Prompt template",
-	skill: "Skill",
-};
-
-/** Pi's commands (extensions, prompt templates, skills) as composer rows. */
-export function buildPiSlashCommands(response: {
-	commands?: PiSlashCommand[];
-}): SlashCommand[] {
-	const commands = Array.isArray(response.commands) ? response.commands : [];
-	const seen = new Set<string>();
-	return commands.flatMap((command) => {
-		const name = command.name?.trim();
-		if (!name || seen.has(name)) return [];
-		seen.add(name);
-		const kind = PI_SLASH_SOURCE_LABELS[command.source] ?? "Command";
-		return [
-			{
-				name,
-				description: command.description
-					? `${command.description} · ${kind}`
-					: kind,
-			},
-		];
-	});
-}
+export { buildPiSlashCommands } from "@/lib/pi-slash-command";
 
 // Pi commands come from the user's installed Pi (per workspace); remembered
 // across composer instances like the Cline commands below.
@@ -393,6 +369,12 @@ type ChatInputBarProps = {
 	onListGitBranches: () => Promise<{ current: string; branches: string[] }>;
 	onSwitchGitBranch: (branch: string) => Promise<boolean>;
 	onSend: (prompt: string) => void;
+	/** True while a Pi slash command invoke is in flight. */
+	piCommandPending?: boolean;
+	/** Guidance or failure from the last Pi slash command. */
+	piCommandNotice?: string | null;
+	/** Increment to open the Pi provider picker (the /model control). */
+	modelPickerRequest?: number;
 	onAbort: () => void;
 	promptsInQueue: PromptInQueue[];
 	attachments: Array<{ id: string; name: string; isImage: boolean }>;
@@ -445,6 +427,9 @@ function ChatInputBarImpl({
 	onListGitBranches,
 	onSwitchGitBranch,
 	onSend,
+	piCommandPending = false,
+	piCommandNotice = null,
+	modelPickerRequest = 0,
 	onAbort,
 	promptsInQueue,
 	attachments,
@@ -621,18 +606,31 @@ function ChatInputBarImpl({
 		? attachments.filter((attachment) => attachment.isImage).length
 		: 0;
 	const isPiRuntime = runtime === "pi";
+	// Known builtins can reach execute_pi_command without starting a model.
+	// Unknown slash text may be an extension or prompt template and must still
+	// pass normal model validation before its first session starts.
+	const piSlashDraft =
+		isPiRuntime &&
+		isPiSlashInput(promptInput) &&
+		isKnownPiBuiltin(piSlashCommandName(promptInput));
 	// A Pi thread needs a picked provider/model before its process can start.
 	const needsPiModel =
-		isPiRuntime && (!provider.trim() || !model.trim()) && !hasActiveSession;
-	const sendBlockedReason = needsPiModel
-		? "Select a Pi provider and model before sending"
-		: undefined;
+		isPiRuntime &&
+		!piSlashDraft &&
+		(!provider.trim() || !model.trim()) &&
+		!hasActiveSession;
+	const sendBlockedReason = piCommandPending
+		? "Pi command is running"
+		: needsPiModel
+			? "Select a Pi provider and model before sending"
+			: undefined;
 	const canSend =
 		hasDraft &&
 		!speechInputActive &&
 		!needsCloudRepository &&
 		!readOnly &&
-		!needsPiModel;
+		!needsPiModel &&
+		!piCommandPending;
 	const steeringPromptRef = useRef(false);
 	const steerFirstQueuedPrompt = async () => {
 		const firstPrompt = promptsInQueue[0];
@@ -655,7 +653,7 @@ function ChatInputBarImpl({
 		}
 	};
 	const handleSend = useCallback(() => {
-		if (speechInputActive || readOnly) return;
+		if (speechInputActive || readOnly || piCommandPending) return;
 		if (unsupportedDraftImageCount > 0) {
 			reportUnsupportedImages();
 			return;
@@ -682,6 +680,7 @@ function ChatInputBarImpl({
 	}, [
 		needsCloudRepository,
 		needsPiModel,
+		piCommandPending,
 		readOnly,
 		onSend,
 		promptInput,
@@ -690,6 +689,23 @@ function ChatInputBarImpl({
 		unsupportedDraftImageCount,
 		reportUnsupportedImages,
 	]);
+	const seenModelPickerRequestRef = useRef(modelPickerRequest);
+	useEffect(() => {
+		if (
+			!isPiRuntime ||
+			modelPickerRequest === 0 ||
+			modelPickerRequest === seenModelPickerRequestRef.current
+		) {
+			return;
+		}
+		seenModelPickerRequestRef.current = modelPickerRequest;
+		const trigger = document.querySelector<HTMLButtonElement>(
+			'button[aria-label^="Pi provider"]',
+		);
+		if (trigger && trigger.getAttribute("aria-expanded") !== "true") {
+			trigger.click();
+		}
+	}, [isPiRuntime, modelPickerRequest]);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [transcriptionTarget, setTranscriptionTarget] =
 		useState<TranscriptionModelTarget | null>(null);
@@ -757,7 +773,7 @@ function ChatInputBarImpl({
 		runtime === "pi"
 			? cachedPiSlashCommands?.workspaceRoot === workspaceRoot
 				? cachedPiSlashCommands.commands
-				: []
+				: PI_SLASH_COMMAND_FALLBACK
 			: (cachedSlashCommands ?? BUILTIN_SLASH_COMMANDS),
 	);
 	const [slashLoading, setSlashLoading] = useState(false);
@@ -1221,17 +1237,18 @@ function ChatInputBarImpl({
 			setSlashLoading(cached === null);
 			if (cached) setSlashCommands(cached);
 			desktopClient
-				.invoke<{ commands?: PiSlashCommand[] }>("list_pi_commands", {
+				.invoke<{ commands?: PiSlashCommandInfo[] }>("list_pi_commands", {
 					workspaceRoot,
 				})
 				.then((response) => {
 					if (cancelled) return;
-					const next = buildPiSlashCommands(response);
+					// Builtins win over colliding extensions, matching Pi 0.87.0.
+					const next = mergePiSlashCommands(response);
 					cachedPiSlashCommands = { workspaceRoot, commands: next };
 					setSlashCommands(next);
 				})
 				.catch(() => {
-					// Keep whatever was cached on error.
+					if (!cached) setSlashCommands(PI_SLASH_COMMAND_FALLBACK);
 				})
 				.finally(() => {
 					if (!cancelled) setSlashLoading(false);
@@ -1574,7 +1591,7 @@ function ChatInputBarImpl({
 								}
 								if (e.key === "Enter" && !e.shiftKey) {
 									e.preventDefault();
-									if (canSend) {
+									if (canSend && !piCommandPending) {
 										handleSend();
 									} else if (
 										!hasDraft &&
@@ -1698,6 +1715,19 @@ function ChatInputBarImpl({
 						</div>
 					</div>
 				</div>
+				{piCommandPending ? (
+					<output
+						aria-live="polite"
+						className="block px-2 text-sm text-muted-foreground"
+					>
+						Running Pi command…
+					</output>
+				) : null}
+				{piCommandNotice ? (
+					<output aria-live="polite" className="block px-2 text-sm">
+						{piCommandNotice}
+					</output>
+				) : null}
 				{unsupportedDraftImageCount > 0 && (
 					<output className="block px-2 text-sm text-destructive">
 						This model doesn’t support the attached images. Remove them or

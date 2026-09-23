@@ -6,6 +6,7 @@ import { normalizeTitle } from "@/components/utils";
 import { toast } from "@/hooks/use-toast";
 import { humanizeCloudSessionError } from "@/lib/cloud-session-error";
 import { desktopClient } from "@/lib/desktop-client";
+import { PI_SESSION_REFRESH_EVENT } from "@/lib/pi-slash-command";
 import type {
 	SessionHistoryItem,
 	SessionHistoryStatus,
@@ -1206,10 +1207,14 @@ export function useSessionHistory({
 			scheduleRefresh(HISTORY_FAST_REFRESH_DELAY_MS, { force: true });
 		};
 
+		const handlePiSessionRefresh = () => {
+			scheduleRefresh(HISTORY_FAST_REFRESH_DELAY_MS, { force: true });
+		};
 		window.addEventListener(
 			"cline:session-title-updated",
 			handleTitleUpdated as EventListener,
 		);
+		window.addEventListener(PI_SESSION_REFRESH_EVENT, handlePiSessionRefresh);
 		window.addEventListener(
 			"cline:session-deleted",
 			handleSessionDeleted as EventListener,
@@ -1377,6 +1382,10 @@ export function useSessionHistory({
 			window.removeEventListener(
 				"cline:session-title-updated",
 				handleTitleUpdated as EventListener,
+			);
+			window.removeEventListener(
+				PI_SESSION_REFRESH_EVENT,
+				handlePiSessionRefresh,
 			);
 			window.removeEventListener(
 				"cline:session-deleted",

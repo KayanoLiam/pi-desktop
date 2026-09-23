@@ -37,6 +37,7 @@ import type {
 	ToolCallStartEvent,
 	ToolCallUpdateEvent,
 } from "@/hooks/chat-session/types";
+import { toast } from "@/hooks/use-toast";
 import {
 	type ChatMessage,
 	ChatMessageImageSchema,
@@ -49,6 +50,18 @@ import { humanizeCloudSessionError } from "@/lib/cloud-session-error";
 import { appendCappedCommandOutput } from "@/lib/command-output";
 import { desktopClient } from "@/lib/desktop-client";
 import { imageAttachmentMediaType } from "@/lib/image-attachments";
+import {
+	buildExecutePiCommandRequest,
+	isKnownPiBuiltin,
+	isPiSlashInput,
+	PI_SESSION_REFRESH_EVENT,
+	type PiCommandHandled,
+	parseExecutePiCommandResponse,
+	piCommandInFlightMessage,
+	piSlashCommandName,
+	readDiscoveredSessionTitle,
+	unhandledBuiltinGuidance,
+} from "@/lib/pi-slash-command";
 import {
 	buildSessionDiffState,
 	EMPTY_DIFF_SUMMARY,
@@ -575,6 +588,9 @@ export function useChatSession(environmentId: string) {
 	// Names what the runtime is doing before the first output of a turn (in
 	// place of "Thinking..."); ephemeral, cleared when the turn moves on.
 	const [activityLabel, setActivityLabel] = useState<string | null>(null);
+	const [piCommandPending, setPiCommandPending] = useState(false);
+	const [piCommandNotice, setPiCommandNotice] = useState<string | null>(null);
+	const piCommandInFlightRef = useRef(false);
 	const [hydratedHistorySessionId, setHydratedHistorySessionId] = useState<
 		string | null
 	>(null);
@@ -2670,6 +2686,143 @@ export function useChatSession(environmentId: string) {
 		],
 	);
 
+	// Pi slash commands are resolved before any optimistic bubble, session
+	// start, or attachment consume. Known builtins never continue into a model
+	// turn. `continue` means a non-builtin the endpoint left to the normal path.
+	const runPiSlashCommand = useCallback(
+		async (
+			text: string,
+			onPiCommand?: (result: PiCommandHandled) => void,
+		): Promise<boolean | "continue"> => {
+			if (piCommandInFlightRef.current) {
+				const message = piCommandInFlightMessage();
+				setPiCommandNotice(message);
+				setError(message);
+				return false;
+			}
+			piCommandInFlightRef.current = true;
+			setPiCommandPending(true);
+			setPiCommandNotice(null);
+			setError(null);
+			const commandName = piSlashCommandName(text);
+			const activeSessionId = sessionId ?? activeSessionIdRef.current;
+			try {
+				const response = await desktopClient.invoke(
+					"execute_pi_command",
+					buildExecutePiCommandRequest({
+						text,
+						sessionId: activeSessionId,
+						workspaceRoot: config.workspaceRoot || config.cwd,
+					}),
+				);
+				const parsed = parseExecutePiCommandResponse(response);
+				if (!parsed.handled) {
+					if (isKnownPiBuiltin(commandName)) {
+						const message = unhandledBuiltinGuidance(commandName);
+						setPiCommandNotice(message);
+						setError(message);
+						toast({ title: "Pi command", description: message });
+						return false;
+					}
+					return "continue";
+				}
+				let sessionTitle: string | undefined;
+				let notice = parsed.message;
+				if (parsed.refresh && activeSessionId) {
+					try {
+						const historyMessages = await desktopClient.invoke<ChatMessage[]>(
+							"read_session_messages",
+							{
+								environmentId,
+								sessionId: activeSessionId,
+								maxMessages: MAX_MESSAGES,
+							},
+						);
+						if (
+							activeSessionIdRef.current === activeSessionId &&
+							Array.isArray(historyMessages) &&
+							historyMessages.length > 0
+						) {
+							applyCanonicalHistory(activeSessionId, historyMessages);
+						}
+						void refreshSessionDiffSummary(activeSessionId);
+						const discovered = await desktopClient
+							.invoke("get_discovered_session", {
+								environmentId,
+								sessionId: activeSessionId,
+							})
+							.catch(() => null);
+						sessionTitle = readDiscoveredSessionTitle(discovered);
+						if (typeof window !== "undefined") {
+							if (sessionTitle) {
+								window.dispatchEvent(
+									new CustomEvent("cline:session-title-updated", {
+										detail: {
+											sessionId: activeSessionId,
+											environmentId,
+											title: sessionTitle,
+										},
+									}),
+								);
+							}
+							window.dispatchEvent(
+								new CustomEvent(PI_SESSION_REFRESH_EVENT, {
+									detail: {
+										sessionId: activeSessionId,
+										environmentId,
+									},
+								}),
+							);
+						}
+					} catch (refreshError) {
+						notice = `${parsed.message} The transcript could not be refreshed: ${errorMessage(refreshError)}`;
+					}
+				}
+				setPiCommandNotice(notice);
+				if (activeSessionId && activeSessionIdRef.current === activeSessionId) {
+					addMessage({
+						id: makeId("status"),
+						sessionId: activeSessionId,
+						role: "status",
+						content: parsed.message,
+						createdAt: Date.now(),
+					});
+				}
+				toast({ title: "Pi command", description: parsed.message });
+				onPiCommand?.({
+					message: parsed.message,
+					uiAction: parsed.uiAction,
+					refresh: parsed.refresh,
+					preserveAttachments: true,
+					sessionTitle,
+				});
+				return true;
+			} catch (err) {
+				const message = errorMessage(err);
+				setPiCommandNotice(message);
+				setError(message);
+				toast({
+					variant: "destructive",
+					title: "Pi command failed",
+					description: message,
+				});
+				return false;
+			} finally {
+				piCommandInFlightRef.current = false;
+				setPiCommandPending(false);
+			}
+		},
+		[
+			addMessage,
+			applyCanonicalHistory,
+			config.cwd,
+			config.workspaceRoot,
+			environmentId,
+			refreshSessionDiffSummary,
+			sessionId,
+		],
+	);
+
 	// Resolves to false when the runtime never took the prompt (a failure
 	// before dispatch, or a provider switch / OAuth refresh that threw before
 	// the turn began) so the caller can hand the text back to the composer.
@@ -2680,12 +2833,21 @@ export function useChatSession(environmentId: string) {
 			options?: {
 				/** Start the session in a fresh git worktree of the current workspace. */
 				inNewWorktree?: boolean;
+				/** Page knows a fresh local thread is Pi before config.runtime catches up. */
+				piRuntime?: boolean;
+				onPiCommand?: (result: PiCommandHandled) => void;
 			},
 		): Promise<boolean> => {
 			if (isCloudSessionExpired) return false;
 			const trimmed = prompt.trim();
 			if (!trimmed && attachedFiles.length === 0) return true;
 
+			const piRuntime = options?.piRuntime === true || config.runtime === "pi";
+			if (piRuntime && isPiSlashInput(trimmed)) {
+				const outcome = await runPiSlashCommand(trimmed, options?.onPiCommand);
+				if (outcome !== "continue") return outcome;
+			}
+			setPiCommandNotice(null);
 			setError(null);
 			setIsHydratingSession(false);
 			abortedRef.current = false;
@@ -3530,6 +3692,7 @@ export function useChatSession(environmentId: string) {
 			startSession,
 			status,
 			postSession,
+			runPiSlashCommand,
 			setPromptsInQueue,
 		],
 	);
@@ -4202,6 +4365,8 @@ export function useChatSession(environmentId: string) {
 		isHydratingSession,
 		activeAssistantMessageId,
 		activityLabel,
+		piCommandPending,
+		piCommandNotice,
 		config,
 		messages,
 		rawTranscript,

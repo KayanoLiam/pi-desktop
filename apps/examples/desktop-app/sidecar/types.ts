@@ -22,6 +22,29 @@ export type ChatTurnAttachments = {
 	userFiles?: Array<{ name: string; content: string }>;
 };
 
+/** Native desktop controls a handled Pi builtin may ask the webview to open. */
+export type PiCommandUiAction =
+	| "new"
+	| "model"
+	| "settings"
+	| "resume"
+	| "fork";
+
+/**
+ * `execute_pi_command` result. `handled: false` means the text is not a
+ * builtin Pi would run itself (unknown, extension, prompt, or skill) and the
+ * existing send pipeline must run unchanged.
+ */
+export type ExecutePiCommandResult =
+	| { handled: false }
+	| {
+			handled: true;
+			message: string;
+			uiAction?: PiCommandUiAction;
+			/** Reload the active session transcript, state, and sidebar metadata. Not a new LLM turn. */
+			refresh?: boolean;
+	  };
+
 export type ChatSessionCommandRequest = {
 	action:
 		| "start"

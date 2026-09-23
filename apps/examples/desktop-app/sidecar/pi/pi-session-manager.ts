@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
 	deleteMaterializedAttachments,
@@ -14,6 +17,7 @@ import {
 } from "../context";
 import {
 	type ChatSessionCommandRequest,
+	type ExecutePiCommandResult,
 	type JsonRecord,
 	LOCAL_ENVIRONMENT_ID,
 	type PendingAskQuestion,
@@ -39,6 +43,17 @@ import {
 	piToolResultText,
 } from "./pi-session-files";
 import { PiSessionMetadataStore } from "./pi-session-metadata";
+import {
+	desktopUiCommand,
+	formatCompactionMessage,
+	formatSessionInfo,
+	mergeBuiltinCommands,
+	PI_JSONL_EXPORT_GUIDANCE,
+	piBuiltinCommandName,
+	piCommandRemainder,
+	piPathArgument,
+	unsupportedBuiltinGuidance,
+} from "./pi-slash-commands";
 
 /**
  * Runs desktop threads through the user's installed Pi CLI: one
@@ -51,7 +66,7 @@ import { PiSessionMetadataStore } from "./pi-session-metadata";
 export type PiSlashCommand = {
 	name: string;
 	description?: string;
-	source: "extension" | "prompt" | "skill";
+	source: "builtin" | "extension" | "prompt" | "skill";
 };
 
 type RunResult = {
@@ -95,6 +110,8 @@ type PiLiveSession = {
 	model?: string;
 	thinkingLevel?: string;
 	busy: boolean;
+	/** Manual `/compact` is in flight. Distinct from a model turn so send cannot queue over it. */
+	compacting: boolean;
 	stale: boolean;
 	lastActivityAt: number;
 	run: ActiveRun | null;
@@ -115,6 +132,8 @@ export type PiSessionManagerOptions = {
 	idleTtlMs?: number;
 	reapIntervalMs?: number;
 	startupTimeoutMs?: number;
+	/** Manual `/compact` waits longer than the default RPC timeout; it calls the model. */
+	compactTimeoutMs?: number;
 	gateExtensionPath?: () => string;
 };
 
@@ -123,6 +142,8 @@ const DEFAULT_REAP_INTERVAL_MS = 60_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 90_000;
 const COMMANDS_CACHE_TTL_MS = 5 * 60_000;
 const DISCOVERY_TIMEOUT_MS = 30_000;
+/** Summarization can outlive the 30s RPC default. A finite timeout still fails closed. */
+const DEFAULT_COMPACT_TIMEOUT_MS = 5 * 60_000;
 const IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i;
 
 export function getPiSessionManager(ctx: SidecarContext): PiSessionManager {
@@ -289,6 +310,15 @@ export class PiSessionManager {
 		if (!prompt && userImages.length === 0 && userFiles.length === 0) {
 			throw new Error("prompt or attachment is required");
 		}
+		// Known builtins never become a model turn. Interactive Pi runs them
+		// before extension/template expansion, so a colliding extension must not
+		// win by falling through to RPC `prompt`.
+		const builtin = piBuiltinCommandName(prompt);
+		if (builtin) {
+			throw new Error(
+				`Builtin Pi command /${builtin} must be handled via execute_pi_command, not sent as a prompt.`,
+			);
+		}
 		let live = this.live.get(sessionId);
 		if (!live) {
 			const summary = this.files.findById(sessionId);
@@ -299,6 +329,11 @@ export class PiSessionManager {
 		} else if (request.config) {
 			live.config = { ...live.config, ...request.config };
 			if (!live.busy) await this.applyModelSelection(live);
+		}
+		if (live.compacting) {
+			throw new Error(
+				"Pi is compacting this session. Wait for compaction to finish, then retry.",
+			);
 		}
 		live.lastActivityAt = Date.now();
 		const images = userImages.flatMap((image) => {
@@ -531,23 +566,296 @@ export class PiSessionManager {
 			return cached.commands;
 		}
 		const live = [...this.live.values()].find((entry) => entry.cwd === key);
-		let commands: PiSlashCommand[];
-		if (live) {
-			const response = await live.process.request<{ commands?: unknown }>(
-				{ type: "get_commands" },
-				{ timeoutMs: 15_000 },
-			);
-			commands = response.success
-				? normalizeCommands(response.data?.commands)
-				: [];
-		} else {
-			commands = await this.discoverCommands(key);
+		let discovered: PiSlashCommand[] = [];
+		let discoveryFailed = false;
+		try {
+			if (live) {
+				const response = await live.process.request<{ commands?: unknown }>(
+					{ type: "get_commands" },
+					{ timeoutMs: 15_000 },
+				);
+				if (!response.success) {
+					throw new Error(response.error || "get_commands failed");
+				}
+				discovered = normalizeCommands(response.data?.commands);
+			} else {
+				discovered = await this.discoverCommands(key);
+			}
+		} catch (error) {
+			discoveryFailed = true;
+			this.ctx.logger?.debug("Pi command discovery failed", { error });
+			discovered = [];
 		}
-		this.commandsCache.set(key, { at: Date.now(), commands });
+		// Builtins stay listed when discovery fails, and they replace a colliding
+		// extension/template/skill because interactive Pi does the same.
+		// A failed discovery is not cached, so the next menu open can retry.
+		const commands = mergeBuiltinCommands(discovered);
+		if (!discoveryFailed) {
+			this.commandsCache.set(key, { at: Date.now(), commands });
+		}
 		return commands;
 	}
 
-	/** Pi configuration changed: idle processes restart lazily, busy ones after their run. */
+	/**
+	 * Run one Pi slash command. Unknown text returns `handled: false` so the
+	 * existing extension/template/skill pipeline is unchanged. Errors throw.
+	 */
+	async executeCommand(input: {
+		sessionId?: string;
+		workspaceRoot?: string;
+		text: string;
+	}): Promise<ExecutePiCommandResult> {
+		const text = input.text?.trim() ?? "";
+		if (!text) throw new Error("text is required");
+		const name = piBuiltinCommandName(text);
+		if (!name) return { handled: false };
+		const ui = desktopUiCommand(name, text);
+		if (ui) {
+			if (name === "fork" && !input.sessionId?.trim()) {
+				throw new Error("An active Pi session is required for /fork.");
+			}
+			return ui;
+		}
+		const unsupported = unsupportedBuiltinGuidance(name);
+		if (unsupported) return unsupported;
+		switch (name) {
+			case "compact":
+				return this.executeCompact(input.sessionId, text);
+			case "name":
+				return this.executeName(input.sessionId, text);
+			case "session":
+				return this.executeSessionInfo(input.sessionId);
+			case "export":
+				return this.executeExport(input.sessionId, input.workspaceRoot, text);
+			default:
+				return {
+					handled: true,
+					message: `/${name} is a Pi builtin, but Desktop does not run it. Nothing was changed.`,
+				};
+		}
+	}
+
+	private requireSessionId(
+		sessionId: string | undefined,
+		command: string,
+	): string {
+		const id = sessionId?.trim() ?? "";
+		if (!id)
+			throw new Error(`An active Pi session is required for /${command}.`);
+		return id;
+	}
+
+	private async ensureLiveSession(sessionId: string): Promise<PiLiveSession> {
+		const live = this.live.get(sessionId);
+		if (live) return live;
+		const summary = this.files.findById(sessionId);
+		if (!summary) throw new Error(`Pi session ${sessionId} not found`);
+		return this.spawn(sessionId, {}, { resume: summary });
+	}
+
+	private assertIdle(live: PiLiveSession, command: string): void {
+		if (live.compacting || live.busy || live.run) {
+			throw new Error(
+				`Pi is busy. Wait until the session is idle, then retry /${command}.`,
+			);
+		}
+	}
+
+	private async executeCompact(
+		sessionId: string | undefined,
+		text: string,
+	): Promise<ExecutePiCommandResult> {
+		const id = this.requireSessionId(sessionId, "compact");
+		const live = await this.ensureLiveSession(id);
+		this.assertIdle(live, "compact");
+		const instructions = piCommandRemainder(text, "compact");
+		const timeoutMs =
+			this.options.compactTimeoutMs ?? DEFAULT_COMPACT_TIMEOUT_MS;
+		live.compacting = true;
+		this.setBusy(live, true);
+		try {
+			const response = await live.process.request<{
+				summary?: string;
+				tokensBefore?: number;
+				estimatedTokensAfter?: number;
+			}>(
+				{
+					type: "compact",
+					...(instructions ? { customInstructions: instructions } : {}),
+				},
+				{ timeoutMs },
+			);
+			if (!response.success) {
+				throw new Error(response.error || "Compaction failed");
+			}
+			if (live.sessionFile) this.files.summarize(live.sessionFile);
+			return {
+				handled: true,
+				message: formatCompactionMessage(response.data ?? {}, instructions),
+				refresh: true,
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (/compaction cancel(?:l)?ed/i.test(message)) {
+				throw new Error("Compaction was cancelled. Nothing was compacted.");
+			}
+			if (message.includes("did not answer compact")) {
+				await this.requestAbort(live);
+				// RPC no longer tracks the timed-out response. Do not advertise idle
+				// while the old process could still be writing the session summary.
+				if (this.live.get(id) === live) {
+					await this.terminate(id, "Pi compaction timed out");
+				}
+				throw new Error(
+					`Compaction timed out after ${timeoutMs}ms and was aborted. Wait until the session is idle, then retry /compact.`,
+				);
+			}
+			if (this.live.get(id) !== live) {
+				throw new Error(
+					"Compaction stopped because the Pi session closed. Nothing was compacted.",
+				);
+			}
+			throw error instanceof Error ? error : new Error(message);
+		} finally {
+			live.compacting = false;
+			if (!live.run) this.setBusy(live, false);
+			if (live.stale && this.live.get(id) === live) {
+				void this.terminate(id, "Pi configuration changed");
+			}
+		}
+	}
+
+	private async executeName(
+		sessionId: string | undefined,
+		text: string,
+	): Promise<ExecutePiCommandResult> {
+		const id = this.requireSessionId(sessionId, "name");
+		const name = piCommandRemainder(text, "name");
+		if (!name) {
+			const current = await this.currentSessionName(id);
+			return {
+				handled: true,
+				message: current
+					? `Session name: ${current}`
+					: "Usage: /name <name>. This session has no display name.",
+			};
+		}
+		const renamed = await this.setSessionName(id, name);
+		if (!renamed) throw new Error(`Pi session ${id} not found`);
+		const stored = (await this.currentSessionName(id)) || name;
+		const normalized =
+			stored !== name ? ` Pi stored it as ${JSON.stringify(stored)}.` : "";
+		return {
+			handled: true,
+			message: `Session name set to ${stored}.${normalized}`,
+			refresh: true,
+		};
+	}
+
+	private async currentSessionName(
+		sessionId: string,
+	): Promise<string | undefined> {
+		const live = this.live.get(sessionId);
+		if (live) {
+			const state = await live.process.request<{ sessionName?: string }>({
+				type: "get_state",
+			});
+			if (state.success && typeof state.data?.sessionName === "string") {
+				const stored = state.data.sessionName.trim();
+				if (stored) return stored;
+			}
+		}
+		return this.files.findById(sessionId)?.name;
+	}
+
+	private async executeSessionInfo(
+		sessionId: string | undefined,
+	): Promise<ExecutePiCommandResult> {
+		const id = this.requireSessionId(sessionId, "session");
+		const live = await this.ensureLiveSession(id);
+		const [stats, state] = await Promise.all([
+			live.process.request<{
+				sessionFile?: string;
+				sessionId?: string;
+				userMessages?: number;
+				assistantMessages?: number;
+				toolCalls?: number;
+				toolResults?: number;
+				totalMessages?: number;
+				tokens?: {
+					input?: number;
+					output?: number;
+					cacheRead?: number;
+					cacheWrite?: number;
+					total?: number;
+				};
+				cost?: number;
+			}>({ type: "get_session_stats" }),
+			live.process.request<{ sessionName?: string }>({ type: "get_state" }),
+		]);
+		if (!stats.success)
+			throw new Error(stats.error || "Could not read session stats");
+		const sessionName = state.success ? state.data?.sessionName : undefined;
+		return {
+			handled: true,
+			message: formatSessionInfo({
+				...stats.data,
+				sessionName,
+			}),
+		};
+	}
+
+	private async executeExport(
+		sessionId: string | undefined,
+		workspaceRoot: string | undefined,
+		text: string,
+	): Promise<ExecutePiCommandResult> {
+		const id = this.requireSessionId(sessionId, "export");
+		const outputPath = piPathArgument(text, "export");
+		const live = await this.ensureLiveSession(id);
+		this.assertIdle(live, "export");
+		const cwd =
+			live.cwd || workspaceRoot?.trim() || this.ctx.localWorkspaceRoot;
+		// Pi normalizes file:// and ~/ paths before writing. Use the same
+		// target for the preflight guard, not the literal command argument.
+		const target = outputPath
+			? resolvePiExportTarget(outputPath, cwd)
+			: undefined;
+		if (target && live.sessionFile && samePath(target, live.sessionFile)) {
+			throw new Error("Refusing to export over the active Pi session file.");
+		}
+		if (target?.toLowerCase().endsWith(".jsonl")) {
+			return { handled: true, message: PI_JSONL_EXPORT_GUIDANCE };
+		}
+		const response = await live.process.request<{ path?: string }>({
+			type: "export_html",
+			...(outputPath ? { outputPath } : {}),
+		});
+		if (!response.success) {
+			throw new Error(response.error || "Failed to export session");
+		}
+		const path = response.data?.path?.trim();
+		if (!path) {
+			throw new Error("Pi exported the session but did not return a path");
+		}
+		if (live.sessionFile && samePath(path, live.sessionFile)) {
+			throw new Error("Refusing to export over the active Pi session file.");
+		}
+		return {
+			handled: true,
+			message: `Exported the session to HTML: ${path}`,
+		};
+	}
+
+	private async requestAbort(live: PiLiveSession): Promise<void> {
+		try {
+			await live.process.request({ type: "abort" }, { timeoutMs: 5_000 });
+		} catch {
+			// The compact timeout is already the user-facing failure.
+		}
+	}
+
+	/** Pi configuration changed: restart idle processes now, busy ones after their run or compaction. */
 	markStale(): void {
 		this.commandsCache.clear();
 		for (const live of this.live.values()) {
@@ -666,6 +974,7 @@ export class PiSessionManager {
 			sessionFile: resume?.path,
 			config,
 			busy: false,
+			compacting: false,
 			stale: false,
 			lastActivityAt: Date.now(),
 			run: null,
@@ -1388,22 +1697,50 @@ export class PiSessionManager {
 					PI_DESKTOP: "1",
 				},
 			});
-		} catch {
-			return [];
+		} catch (error) {
+			throw error instanceof Error ? error : new Error(String(error));
 		}
 		try {
 			const response = await child.request<{ commands?: unknown }>(
 				{ type: "get_commands" },
 				{ timeoutMs: DISCOVERY_TIMEOUT_MS },
 			);
-			return response.success ? normalizeCommands(response.data?.commands) : [];
-		} catch (error) {
-			this.ctx.logger?.debug("Pi command discovery failed", { error });
-			return [];
+			if (!response.success) {
+				throw new Error(response.error || "get_commands failed");
+			}
+			return normalizeCommands(response.data?.commands);
 		} finally {
 			void child.kill(500);
 		}
 	}
+}
+
+function resolvePiExportTarget(outputPath: string, cwd: string): string {
+	let path = outputPath;
+	if (path === "~") {
+		path = homedir();
+	} else if (
+		path.startsWith("~/") ||
+		(process.platform === "win32" && path.startsWith("~\\"))
+	) {
+		path = resolve(homedir(), path.slice(2));
+	}
+	if (path.startsWith("file://")) path = fileURLToPath(path);
+	return resolve(cwd, path);
+}
+
+function samePath(left: string, right: string): boolean {
+	const resolvedLeft = resolve(left);
+	const resolvedRight = resolve(right);
+	if (resolvedLeft === resolvedRight) return true;
+	try {
+		if (existsSync(resolvedLeft) && existsSync(resolvedRight)) {
+			return realpathSync(resolvedLeft) === realpathSync(resolvedRight);
+		}
+	} catch {
+		return false;
+	}
+	return false;
 }
 
 function normalizeCommands(raw: unknown): PiSlashCommand[] {
@@ -1413,10 +1750,16 @@ function normalizeCommands(raw: unknown): PiSlashCommand[] {
 	for (const item of raw) {
 		if (!item || typeof item !== "object") continue;
 		const record = item as JsonRecord;
-		const name = typeof record.name === "string" ? record.name.trim() : "";
+		const rawName = typeof record.name === "string" ? record.name.trim() : "";
+		const name = rawName.replace(/^\//, "");
 		const source = record.source;
 		if (!name || seen.has(name)) continue;
-		if (source !== "extension" && source !== "prompt" && source !== "skill")
+		if (
+			source !== "builtin" &&
+			source !== "extension" &&
+			source !== "prompt" &&
+			source !== "skill"
+		)
 			continue;
 		seen.add(name);
 		out.push({

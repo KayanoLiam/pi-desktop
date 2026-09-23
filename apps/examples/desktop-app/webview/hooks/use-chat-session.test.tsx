@@ -7080,3 +7080,298 @@ describe("cloud snapshot replay", () => {
 		expect(users.map((m) => m.id)).toEqual(["canonical-first", secondId]);
 	});
 });
+
+describe("useChatSession Pi slash commands", () => {
+	const piSession = {
+		sessionId: "ses-pi",
+		environmentId: "local",
+		source: "pi",
+		status: "completed" as const,
+		provider: "p",
+		model: "m",
+		cwd: "/workspace/cline",
+		workspaceRoot: "/workspace/cline",
+		startedAt: "2026-09-01T00:00:00Z",
+	};
+
+	async function hydratePi(status: "completed" | "running" = "completed") {
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "read_session_messages") {
+				return [
+					{
+						id: "u1",
+						sessionId: piSession.sessionId,
+						role: "user",
+						content: "hello",
+						createdAt: 1,
+					},
+				];
+			}
+			if (command === "chat_session_command") {
+				return { ...piSession, status };
+			}
+			return [];
+		});
+		await act(async () => {
+			await current.hydrateSession({ ...piSession, status });
+		});
+	}
+
+	it("runs /compact before any optimistic send and refreshes the transcript", async () => {
+		await hydratePi();
+		const onPiCommand = vi.fn();
+		const events: string[] = [];
+		const listener = (event: Event) => events.push(event.type);
+		window.addEventListener("cline:session-title-updated", listener);
+		window.addEventListener("cline:pi-session-refresh", listener);
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "execute_pi_command") {
+					return {
+						handled: true,
+						message: "Compacted the conversation.",
+						refresh: true,
+					};
+				}
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "summary",
+							sessionId: piSession.sessionId,
+							role: "status",
+							content: "Compacted summary",
+							createdAt: 2,
+						},
+					];
+				}
+				if (command === "get_discovered_session") {
+					return {
+						...piSession,
+						metadata: { title: "Named after compact" },
+					};
+				}
+				if (command === "chat_session_command") {
+					throw new Error(
+						`unexpected ${args?.request && (args.request as { action?: string }).action}`,
+					);
+				}
+				return [];
+			},
+		);
+		invokeMock.mockClear();
+		let taken = false;
+		await act(async () => {
+			taken = await current.sendPrompt("/compact focus on tests", [], {
+				onPiCommand,
+			});
+		});
+		window.removeEventListener("cline:session-title-updated", listener);
+		window.removeEventListener("cline:pi-session-refresh", listener);
+		expect(taken).toBe(true);
+		expect(invokeMock).toHaveBeenCalledWith("execute_pi_command", {
+			text: "/compact focus on tests",
+			sessionId: "ses-pi",
+			workspaceRoot: "/workspace/cline",
+		});
+		expect(
+			invokeMock.mock.calls.some(
+				([command]) => command === "chat_session_command",
+			),
+		).toBe(false);
+		expect(current.messages.some((message) => message.role === "user")).toBe(
+			false,
+		);
+		expect(current.messages.map((message) => message.content)).toEqual([
+			"Compacted summary",
+			"Compacted the conversation.",
+		]);
+		expect(current.status).not.toBe("running");
+		expect(current.status).not.toBe("starting");
+		expect(onPiCommand).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Compacted the conversation.",
+				refresh: true,
+				preserveAttachments: true,
+				sessionTitle: "Named after compact",
+			}),
+		);
+		expect(events).toEqual([
+			"cline:session-title-updated",
+			"cline:pi-session-refresh",
+		]);
+		expect(current.piCommandPending).toBe(false);
+		expect(current.piCommandNotice).toContain("Compacted");
+	});
+
+	it("preserves the draft when /compact fails and does not start a session", async () => {
+		await act(async () => {
+			current.setConfig((previous) => ({
+				...previous,
+				runtime: "pi",
+				provider: "",
+				model: "",
+			}));
+		});
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "execute_pi_command") {
+				throw new Error("An active Pi session is required for /compact.");
+			}
+			if (command === "chat_session_command") {
+				throw new Error("should not start a session");
+			}
+			return [];
+		});
+		let taken = true;
+		await act(async () => {
+			taken = await current.sendPrompt("/compact", [], { piRuntime: true });
+		});
+		expect(taken).toBe(false);
+		expect(current.error).toContain("active Pi session");
+		expect(current.messages).toEqual([]);
+		expect(
+			invokeMock.mock.calls.some(
+				([command]) => command === "chat_session_command",
+			),
+		).toBe(false);
+		expect(current.piCommandNotice).toContain("active Pi session");
+	});
+
+	it("does not send a known builtin to the model when the endpoint leaves it unhandled", async () => {
+		await act(async () => {
+			current.setConfig((previous) => ({
+				...previous,
+				runtime: "pi",
+				provider: "p",
+				model: "m",
+				workspaceRoot: "/workspace/cline",
+				cwd: "/workspace/cline",
+			}));
+		});
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "execute_pi_command") return { handled: false };
+			if (command === "chat_session_command") {
+				throw new Error("builtin fell through");
+			}
+			return [];
+		});
+		let taken = true;
+		await act(async () => {
+			taken = await current.sendPrompt("/compact", [], { piRuntime: true });
+		});
+		expect(taken).toBe(false);
+		expect(current.error).toContain("not sent to the model");
+		expect(
+			current.messages.filter((message) => message.role === "user"),
+		).toEqual([]);
+	});
+
+	it("follows the existing pipeline when an extension command is not handled", async () => {
+		await act(async () => {
+			current.setConfig((previous) => ({
+				...previous,
+				runtime: "pi",
+				provider: "p",
+				model: "m",
+				workspaceRoot: "/workspace/cline",
+				cwd: "/workspace/cline",
+			}));
+		});
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "execute_pi_command") return { handled: false };
+				if (command === "chat_session_command") {
+					const request = args?.request as
+						| {
+								action?: string;
+								sessionId?: string;
+								config?: { sessionId?: string };
+						  }
+						| undefined;
+					if (request?.action === "start") {
+						return {
+							sessionId: request.config?.sessionId,
+							cwd: "/workspace/cline",
+							workspaceRoot: "/workspace/cline",
+						};
+					}
+					if (request?.action === "send") {
+						return {
+							ok: true,
+							result: { text: "reviewed", finishReason: "completed" },
+						};
+					}
+				}
+				return [];
+			},
+		);
+		await act(async () => {
+			await current.sendPrompt("/review", [], { piRuntime: true });
+		});
+		expect(invokeMock).toHaveBeenCalledWith(
+			"execute_pi_command",
+			expect.objectContaining({ text: "/review" }),
+		);
+		expect(invokeMock).toHaveBeenCalledWith(
+			"chat_session_command",
+			expect.objectContaining({
+				request: expect.objectContaining({ action: "send", prompt: "/review" }),
+			}),
+			{ timeoutMs: null },
+		);
+		expect(
+			current.messages.some(
+				(message) => message.role === "user" && message.content === "/review",
+			),
+		).toBe(true);
+	});
+
+	it("routes sessionless /model without starting a Pi process", async () => {
+		const onPiCommand = vi.fn();
+		await act(async () => {
+			current.setConfig((previous) => ({
+				...previous,
+				runtime: "pi",
+				provider: "",
+				model: "",
+			}));
+		});
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "execute_pi_command") {
+				return {
+					handled: true,
+					message: "Choose a model in the picker.",
+					uiAction: "model",
+				};
+			}
+			if (command === "chat_session_command")
+				throw new Error("process started");
+			return [];
+		});
+		let taken = false;
+		await act(async () => {
+			taken = await current.sendPrompt("/model", [], {
+				piRuntime: true,
+				onPiCommand,
+			});
+		});
+		expect(taken).toBe(true);
+		expect(invokeMock).toHaveBeenCalledWith(
+			"execute_pi_command",
+			expect.objectContaining({ text: "/model" }),
+		);
+		expect(
+			invokeMock.mock.calls.find(
+				([command]) => command === "execute_pi_command",
+			)?.[1],
+		).not.toHaveProperty("sessionId");
+		expect(onPiCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ uiAction: "model", preserveAttachments: true }),
+		);
+		expect(current.messages).toEqual([]);
+		expect(
+			invokeMock.mock.calls.some(
+				([command]) => command === "chat_session_command",
+			),
+		).toBe(false);
+	});
+});

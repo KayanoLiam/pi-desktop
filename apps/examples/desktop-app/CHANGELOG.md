@@ -11,7 +11,7 @@ First public beta of **Pi**, a native desktop app for the [Pi](https://github.co
 - Extension dialogs (`select`, `input`, `confirm`, `editor`) appear as question cards in the chat
 - Stop a running turn; messages sent while Pi is busy queue as follow-ups
 - Pi session history from `~/.pi/agent/sessions` appears in the sidebar. Open, continue, rename or delete sessions; they also show up in `pi /resume`
-- Pi's slash commands: typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace
+- Pi's slash commands: typing `/` lists extension commands, prompt templates, skills, and a small builtin fallback (`/compact`, `/name`, `/new`, `/model`, `/settings`, `/resume`) if discovery fails. Submitting a Pi slash command asks the sidecar before a chat turn. `/compact` can refresh the open transcript; `/name` updates the title, `/session` shows statistics, and `/export` writes HTML. `/new`, `/model`, `/settings`, and `/resume` open existing desktop controls and do not need a live Pi process. Unsupported builtins show guidance instead of being sent to the model
 - Your configured Pi models, filtered by `enabledModels`, with per-provider model memory and per-model thinking levels
 - Light and dark themes, a local-first entry screen, no account or sign-in
 - Proxy settings from your shell profile (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are picked up when the app is launched from the Dock, so Pi reaches model APIs the same way it does from a terminal
@@ -28,7 +28,7 @@ xattr -dr com.apple.quarantine "/Applications/Pi.app"
 
 - Apple Silicon only. No Intel, Windows or Linux builds yet
 - No auto-update: install new betas by downloading them
-- Not yet: forking or editing earlier messages of a Pi thread, editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features
+- Not yet: Pi's `/fork`, `/clone`, `/tree`, and the rest of the TUI slash pickers; forking or editing earlier messages of a Pi thread; editing or removing a single queued message; file checkpoints; and SSH remote threads (those still run on the inherited Cline runtime). Desktop Settings opened by `/settings` is the app settings view, not every Pi preference. Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features
 - Settings and session data still live under `~/.cline/data` for the inherited parts of the app
 
 ---

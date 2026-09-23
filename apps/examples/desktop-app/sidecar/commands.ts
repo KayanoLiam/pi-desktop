@@ -2354,6 +2354,27 @@ export async function handleCommand(
 			),
 		};
 	}
+	if (command === "execute_pi_command") {
+		const text = typeof args?.text === "string" ? args.text : "";
+		if (!text.trim()) throw new Error("text is required");
+		const sessionId =
+			typeof args?.sessionId === "string" ? args.sessionId.trim() : "";
+		const environmentId = requestedEnvironmentId(args);
+		if (
+			(environmentId && environmentId !== LOCAL_ENVIRONMENT_ID) ||
+			(sessionId && !isPiSessionCommand(ctx, sessionId, args))
+		) {
+			throw new Error("Pi commands require a local Pi session.");
+		}
+		return await getPiSessionManager(ctx).executeCommand({
+			sessionId: sessionId || undefined,
+			workspaceRoot:
+				typeof args?.workspaceRoot === "string"
+					? args.workspaceRoot
+					: undefined,
+			text,
+		});
+	}
 	if (command === "search_sessions") {
 		const query = String(args?.query ?? "").trim();
 		if (!query) return [];

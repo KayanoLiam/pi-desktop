@@ -23,7 +23,16 @@ export type FakePiScenario = {
 	state?: Record<string, unknown>;
 	models?: unknown[];
 	commands?: unknown[];
+	/** When set, `get_commands` fails so discovery fallback can be tested. */
+	commandsError?: string;
 	messages?: unknown[];
+	compactResult?: Record<string, unknown>;
+	compactError?: string;
+	compactDelayMs?: number;
+	stats?: Record<string, unknown>;
+	statsError?: string;
+	exportPath?: string;
+	exportError?: string;
 	exitOnPrompt?: number;
 	startupExitCode?: number;
 	startupStderr?: string;
@@ -38,6 +47,13 @@ import { StringDecoder } from "node:string_decoder";
 const scenarioPath = process.env.FAKE_PI_SCENARIO;
 const receivedPath = process.env.FAKE_PI_RECEIVED;
 const scenario = scenarioPath ? JSON.parse(readFileSync(scenarioPath, "utf8")) : {};
+const readScenario = () => {
+	try {
+		return JSON.parse(readFileSync(scenarioPath, "utf8"));
+	} catch {
+		return scenario;
+	}
+};
 const args = process.argv.slice(2);
 appendFileSync(receivedPath, JSON.stringify({ argv: args, cwd: process.cwd(), env: { PI_OFFLINE: process.env.PI_OFFLINE ?? null } }) + "\n");
 
@@ -194,9 +210,71 @@ async function handle(line) {
 		case "get_available_models":
 			out({ id, type: "response", command: "get_available_models", success: true, data: { models: scenario.models ?? [] } });
 			return;
-		case "get_commands":
-			out({ id, type: "response", command: "get_commands", success: true, data: { commands: scenario.commands ?? [] } });
+		case "get_commands": {
+			const liveScenario = readScenario();
+			if (liveScenario.commandsError) {
+				out({ id, type: "response", command: "get_commands", success: false, error: String(liveScenario.commandsError) });
+				return;
+			}
+			out({ id, type: "response", command: "get_commands", success: true, data: { commands: liveScenario.commands ?? scenario.commands ?? [] } });
 			return;
+		}
+		case "compact": {
+			const liveScenario = readScenario();
+			if (liveScenario.compactError) {
+				out({ id, type: "response", command: "compact", success: false, error: String(liveScenario.compactError) });
+				return;
+			}
+			const delay = Number(liveScenario.compactDelayMs ?? 0);
+			const started = Date.now();
+			while (Date.now() - started < delay) {
+				if (abortRequested) {
+					out({ type: "compaction_end", reason: "manual", aborted: true, result: null, willRetry: false });
+					out({ id, type: "response", command: "compact", success: false, error: "Compaction cancelled" });
+					return;
+				}
+				await sleep(10);
+			}
+			const result = liveScenario.compactResult ?? {
+				summary: "Compacted summary",
+				firstKeptEntryId: "kept",
+				tokensBefore: 100,
+				estimatedTokensAfter: 20,
+			};
+			out({ type: "compaction_start", reason: "manual" });
+			out({ type: "compaction_end", reason: "manual", aborted: false, willRetry: false, result });
+			out({ id, type: "response", command: "compact", success: true, data: result });
+			return;
+		}
+		case "get_session_stats": {
+			const liveScenario = readScenario();
+			if (liveScenario.statsError) {
+				out({ id, type: "response", command: "get_session_stats", success: false, error: String(liveScenario.statsError) });
+				return;
+			}
+			out({ id, type: "response", command: "get_session_stats", success: true, data: liveScenario.stats ?? {
+				sessionFile,
+				sessionId,
+				userMessages: 1,
+				assistantMessages: 1,
+				toolCalls: 0,
+				toolResults: 0,
+				totalMessages: 2,
+				tokens: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, total: 7 },
+				cost: 0.01,
+			} });
+			return;
+		}
+		case "export_html": {
+			const liveScenario = readScenario();
+			if (liveScenario.exportError) {
+				out({ id, type: "response", command: "export_html", success: false, error: String(liveScenario.exportError) });
+				return;
+			}
+			const path = command.outputPath || liveScenario.exportPath || (process.cwd() + "/session.html");
+			out({ id, type: "response", command: "export_html", success: true, data: { path } });
+			return;
+		}
 		case "get_messages":
 			out({ id, type: "response", command: "get_messages", success: true, data: { messages: scenario.messages ?? [] } });
 			return;

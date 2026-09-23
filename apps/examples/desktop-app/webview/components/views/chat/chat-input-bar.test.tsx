@@ -218,6 +218,10 @@ async function renderVoiceComposer({
 	onPiSelectionChange,
 	executionTarget,
 	onAttachFiles = vi.fn(),
+	piCommandPending,
+	piCommandNotice,
+	modelPickerRequest,
+	hasActiveSession,
 }: {
 	attachments?: Parameters<typeof ChatInputBar>[0]["attachments"];
 	model?: string;
@@ -238,6 +242,10 @@ async function renderVoiceComposer({
 	>[0]["onPiSelectionChange"];
 	executionTarget?: "cloud" | "local";
 	onAttachFiles?: Parameters<typeof ChatInputBar>[0]["onAttachFiles"];
+	piCommandPending?: boolean;
+	piCommandNotice?: string | null;
+	modelPickerRequest?: number;
+	hasActiveSession?: boolean;
 } = {}) {
 	await act(async () => {
 		root.render(
@@ -269,6 +277,10 @@ async function renderVoiceComposer({
 					onRemoveAttachment={vi.fn()}
 					onRemovePromptInQueue={vi.fn()}
 					onSend={onSend}
+					piCommandPending={piCommandPending}
+					piCommandNotice={piCommandNotice}
+					modelPickerRequest={modelPickerRequest}
+					hasActiveSession={hasActiveSession}
 					onSteerPromptInQueue={vi.fn()}
 					onSwitchGitBranch={vi.fn(async () => true)}
 					promptDraft={{ version: promptVersion, value: prompt }}
@@ -339,6 +351,56 @@ describe("ChatInputBar", () => {
 		});
 		expect(onSend).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")?.value).toBe("hello pi");
+	});
+
+	it("permits known Pi builtins without a model but still gates extensions and unknown slash drafts", async () => {
+		const onSend = vi.fn();
+		for (const [index, prompt] of [
+			"/review the diff",
+			"/unknown command",
+			"/skill:brave",
+		].entries()) {
+			await renderVoiceComposer({
+				runtime: "pi",
+				provider: "",
+				model: "",
+				prompt,
+				promptVersion: index + 1,
+				onSend,
+			});
+			const sendButton = container.querySelector<HTMLButtonElement>(
+				'button[aria-label="Send message"]',
+			);
+			expect(sendButton?.disabled).toBe(true);
+			expect(container.querySelector("textarea")?.value).toBe(prompt);
+		}
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "",
+			model: "",
+			prompt: "/bug",
+			promptVersion: 4,
+			onSend,
+		});
+		expect(
+			container.querySelector<HTMLButtonElement>(
+				'button[aria-label="Send message"]',
+			)?.disabled,
+		).toBe(false);
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "",
+			model: "",
+			prompt: "/new",
+			promptVersion: 5,
+			onSend,
+		});
+		await act(async () => {
+			container
+				.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')
+				?.click();
+		});
+		expect(onSend).toHaveBeenCalledExactlyOnceWith("/new");
 	});
 
 	it("toggles Pi tool approvals from the composer", async () => {
@@ -3047,5 +3109,142 @@ describe("ChatInputBar token ring", () => {
 		);
 		const progressCircle = trigger?.querySelector("circle.stroke-red-500");
 		expect(progressCircle?.getAttribute("stroke-dashoffset")).toBe("0");
+	});
+});
+
+describe("ChatInputBar Pi slash submit", () => {
+	it("submits /model without a picked model and does not call the endpoint itself", async () => {
+		const onSend = vi.fn();
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "",
+			model: "",
+			prompt: "/model",
+			onSend,
+		});
+		const send = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Send message"]',
+		);
+		expect(send?.disabled).toBe(false);
+		await act(async () => {
+			send?.click();
+		});
+		expect(onSend).toHaveBeenCalledWith("/model");
+		expect(
+			invokeMock.mock.calls.some(
+				([command]) => command === "execute_pi_command",
+			),
+		).toBe(false);
+		expect(container.querySelector("textarea")?.value).toBe("");
+	});
+
+	it("keeps a normal Pi draft blocked until a model is picked", async () => {
+		const onSend = vi.fn();
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "",
+			model: "",
+			prompt: "hello",
+			onSend,
+		});
+		expect(
+			container.querySelector<HTMLButtonElement>(
+				'button[aria-label="Send message"]',
+			)?.disabled,
+		).toBe(true);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("shows builtin fallbacks without argument placeholders or speculative clone/tree", async () => {
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "list_pi_commands") throw new Error("discovery failed");
+			if (command === "list_pi_model_catalog") return { providers: [] };
+			return undefined;
+		});
+		await renderVoiceComposer({ runtime: "pi", provider: "p", model: "m" });
+		const textarea = container.querySelector("textarea");
+		await act(async () => {
+			const setValue = Object.getOwnPropertyDescriptor(
+				HTMLTextAreaElement.prototype,
+				"value",
+			)?.set;
+			setValue?.call(textarea, "/");
+			textarea?.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await act(async () => {
+			await Promise.resolve();
+		});
+		expect(container.textContent).toContain("/compact");
+		expect(container.textContent).toContain("/name");
+		expect(container.textContent).not.toContain("name <name>");
+		expect(container.textContent).not.toContain("/clone");
+		expect(container.textContent).not.toContain("/tree");
+	});
+
+	it("keeps a colliding extension from replacing the builtin compact row", async () => {
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === "list_pi_commands") {
+				return {
+					commands: [
+						{
+							name: "compact",
+							description: "Extension compact",
+							source: "extension",
+						},
+						{ name: "review", description: "Review code", source: "extension" },
+					],
+				};
+			}
+			if (command === "list_pi_model_catalog") return { providers: [] };
+			return undefined;
+		});
+		await renderVoiceComposer({ runtime: "pi", provider: "p", model: "m" });
+		const textarea = container.querySelector("textarea");
+		await act(async () => {
+			const setValue = Object.getOwnPropertyDescriptor(
+				HTMLTextAreaElement.prototype,
+				"value",
+			)?.set;
+			setValue?.call(textarea, "/");
+			textarea?.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await act(async () => {
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		expect(container.textContent).toContain("/compact");
+		expect(container.textContent).toContain(
+			"Manually compact conversation context",
+		);
+		expect(container.textContent).not.toContain("Extension compact");
+		expect(container.textContent).toContain("/review");
+	});
+
+	it("shows local progress and blocks a second submit while a command is running", async () => {
+		const onSend = vi.fn();
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "p",
+			model: "m",
+			prompt: "/compact",
+			onSend,
+			piCommandPending: true,
+			piCommandNotice: "Compacted the conversation.",
+		});
+		expect(container.textContent).toContain("Running Pi command");
+		expect(container.textContent).toContain("Compacted the conversation.");
+		const send = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Send message"]',
+		);
+		expect(send?.disabled).toBe(true);
+		await act(async () => {
+			send?.click();
+			container
+				.querySelector("textarea")
+				?.dispatchEvent(
+					new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+				);
+		});
+		expect(onSend).not.toHaveBeenCalled();
 	});
 });
