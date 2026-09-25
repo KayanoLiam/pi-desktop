@@ -31,9 +31,10 @@
 - **Chat through Pi.** Each active thread is a `pi --mode rpc` process started from the thread's workspace with the picked provider, model and thinking level. Assistant text and thinking stream live; `bash`, `read`, `edit`, `write`, `grep` and extension tools show as tool cards with live output; token usage and cost come from Pi.
 - **Tool approvals, opt-in.** Tools run without asking by default, like the Pi CLI. Flip the composer's shield to **Ask first** and every tool call waits for your approval; the switch works mid-session.
 - **Extension dialogs.** When an installed Pi extension asks a question (`select`, `input`, `confirm`, `editor`), it appears as a question card in the chat; notifications land in the transcript log.
-- **Stop, queue, steer.** Stop a running turn; messages sent while Pi is busy queue as follow-ups.
+- **Stop, queue, steer.** Stop a running turn. Messages sent while Pi is busy wait in a queue, images included, and go out one by one when Pi finishes; edit, remove, or steer any of them into the running turn. Stopping your own turn lets the queue continue; stopping a queued turn clears the rest.
 - **Pi session history.** Sessions from `~/.pi/agent/sessions` appear in the sidebar with the **Pi** source label. Open one to read it, continue it (Pi is relaunched on that session file), rename or delete it; the same sessions show up in `pi /resume`.
 - **Pi's slash commands.** Typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace. Builtins run in the app where they can: `/compact`, `/name`, `/session`, `/copy`, `/export` (HTML), `/model <model>` and `/thinking <level>`; `/new`, `/model`, `/thinking`, `/settings` and `/resume` open the matching desktop controls. Installing or removing Pi packages in a terminal refreshes the list and the model picker automatically.
+- **Edit and fork.** Edit one of your earlier messages to fork the session from just before it: a new Pi session opens with your edited text in the composer, and the original stays as it was. **Fork** copies the whole session.
 - **Session tree.** `/tree` shows the thread's whole Pi session tree and switches branches without a model turn. Picking an earlier message of yours rewinds to just before it and puts its text back in the composer, so sending starts a new branch (images from that message are not restored).
 - **Model cycling.** On a live thread, **Ctrl+P** cycles through Pi's scoped models. `/scoped-models` chooses which models are in that cycle, either for the current session or saved to Pi's `enabledModels`.
 - **Pi extensions in Settings.** **Extensions → Installed** lists the extensions your global and project Pi configuration resolve. Enable or disable each one, or uninstall an npm/git package after confirmation (local extension files can only be disabled). Browsing links to [pi.dev/packages](https://pi.dev/packages); the app never installs or updates packages.
@@ -43,7 +44,7 @@
 - **Light and dark themes.** Saved preferences and system appearance are respected, with a coral accent and the Pi mark throughout the app.
 - **A local-first entry screen.** Choose a workspace and see its branch without Cline onboarding or an account sign-in. Cline Cloud is disabled.
 
-Not yet: forking a Pi thread, the transcript's inline message editing (use `/tree` to re-edit from an earlier message instead), editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). The **Automations** sidebar entry is an inherited UI surface, not a Pi feature.
+Not yet: file checkpoints for Pi threads, and SSH remote threads (those still run on the inherited Cline runtime). The **Automations** sidebar entry is an inherited UI surface, not a Pi feature.
 
 ## Install (macOS beta)
 
@@ -60,8 +61,10 @@ launch. Either open **System Settings → Privacy & Security** and choose
 xattr -dr com.apple.quarantine "/Applications/Pi.app"
 ```
 
-Apple Silicon only for now, and there is no auto-update: install newer betas
-by downloading them.
+The release also carries test installers for Intel Macs, Windows (NSIS) and
+Linux (DEB/RPM; on Linux the app and package are named **Pi Desktop** /
+`pi-desktop`). They are unsigned and have only been verified to package, not
+to run. There is no auto-update: install newer betas by downloading them.
 
 ## Run locally
 
@@ -88,7 +91,7 @@ This launches the **native Tauri app**. Its development webview uses port `3125`
 
 For browser-only debugging, use `bun run dev:headless` from the app directory. It does **not** open a native window. An older installed Cline app does not reflect this checkout.
 
-macOS on Apple Silicon is the currently exercised native platform. The manual [`pi-desktop-package`](.github/workflows/pi-desktop-package.yml) GitHub workflow packages unsigned test installers for macOS (Apple Silicon and Intel, ad-hoc signed), Windows (NSIS) and Linux (DEB/RPM) as workflow artifacts. It only checks that each installer is produced, so the Intel, Windows and Linux builds are untested beyond packaging and are not published as releases. Signing, notarization, updates, and release automation still need migration.
+macOS on Apple Silicon is the currently exercised native platform. The manual [`pi-desktop-package`](.github/workflows/pi-desktop-package.yml) GitHub workflow packages unsigned test installers for macOS (Apple Silicon and Intel, ad-hoc signed), Windows (NSIS) and Linux (DEB/RPM) as workflow artifacts. It only checks that each installer is produced (and that the deb is named `pi-desktop`, since Ubuntu already has an unrelated `pi` package), so the Intel, Windows and Linux builds are untested beyond packaging. Signing, notarization, updates, and release automation still need migration.
 
 ## Bring your Pi configuration
 
@@ -143,7 +146,7 @@ Existing Cline sessions and SSH environments retain their legacy execution paths
 
 ### Next milestones
 
-- Fork, inline message editing and per-item queue editing for Pi threads; SSH remote threads through Pi.
+- SSH remote threads and file checkpoints through Pi.
 - Replace or extract the remaining Cline workspace/runtime dependencies.
 - Migrate updates, signing, notarization, and release automation.
 - Resolve inherited test/type/lint failures and establish desktop test CI (today only the manual packaging workflow exists).

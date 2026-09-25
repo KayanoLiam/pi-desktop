@@ -25,7 +25,9 @@ sidecar/
 │   ├── pi-session-manager.ts      # One Pi process per active thread; Pi events → desktop events
 │   ├── pi-session-files.ts        # Read-only ~/.pi/agent/sessions parsing + transcript projection
 │   ├── pi-session-metadata.ts     # Desktop-only annotations (pinned) for Pi sessions
-│   ├── pi-desktop-gate-extension.ts # Generated tool_call hook that routes approvals to the desktop
+│   ├── pi-desktop-gate-extension.ts # Generated tool_call hook (approvals) + internal /tree jump command
+│   ├── pi-slash-commands.ts       # Pi builtin slash commands: desktop uiActions and guidance
+│   ├── pi-extensions.ts           # Installed Pi extensions: list, enable/disable, uninstall
 │   └── pi-config-watcher.ts       # Follows Pi CLI installs/settings edits → pi_config_changed
 ├── cloud-sessions.ts     # Cloud session REST client + Hub-proxy manager
 ├── cline-auth.ts         # Refresh-aware Cline auth token resolution
@@ -77,6 +79,19 @@ JSONL tree read-only (never through `SessionManager.open()`, which rewrites old
 versions), projects the active branch into `ChatMessage` rows, appends
 `session_info` for renames, and deletes files on request. Idle processes are
 reaped after 10 minutes and recreated transparently on the next send.
+
+Queued prompts: while Pi is busy, prompts wait in the manager's own queue
+(`PiLiveSession.pending`, with images and attached files) instead of Pi's
+follow-up queue, which can only be cleared as a whole and reports plain text.
+The next prompt is sent as a new turn when Pi settles; `steer_prompt`,
+`update_pending_prompt` and `remove_pending_prompt` work on single items, with
+Cline's rules for stops and failed turns (see the desktop README).
+
+Fork: `fork` locates the edited message on the current branch of Pi's live tree
+(by entry id, else turn number) and calls Pi's `fork`, or `clone` for a whole
+copy. Pi rebinds its process to the new session, so the manager moves the live
+process to the new id; a fork without an assistant message has no file yet and
+keeps its config in `unpersistedSessionConfigs`.
 
 `pi-config-watcher.ts` compares a stat signature of `settings.json`,
 `models.json`, `auth.json`, `npm/`, `git/` and `extensions/`; on change it marks
@@ -211,8 +226,11 @@ Supported commands:
 
 | Command | Implementation |
 |---------|---------------|
-| `chat_session_command` | Pi threads → `PiSessionManager`; else shared Hub through `ClineCore`; cloud sessions route to `CloudSessionManager` |
+| `chat_session_command` | Pi threads → `PiSessionManager` (start/attach/send/abort/stop/reset, queued-prompt actions, `fork`); else shared Hub through `ClineCore`; cloud sessions route to `CloudSessionManager` |
 | `list_pi_model_catalog` | `listPiModelCatalog()` (Pi config + installed-Pi RPC discovery) |
+| `get_pi_tree` / `navigate_pi_tree` | `PiSessionManager.getTree()` / `navigateTree()` — live Pi tree; navigation through the gate extension's `__pi_desktop_tree_jump` command, no model turn |
+| `get_pi_model_scope` / `set_pi_model_scope` / `cycle_pi_model` | `/scoped-models` dialog (session-only restart with `--models`, or save `enabledModels`) and Ctrl+P through Pi's `cycle_model` |
+| `list_pi_extensions` / `set_pi_extension_enabled` / `uninstall_pi_extension_package` | `pi-extensions.ts` over Pi's `SettingsManager` / `DefaultPackageManager`; refused while a Pi thread runs, then idle Pi processes restart |
 | `list_pi_commands` | `PiSessionManager.listCommands()` (`get_commands` from the live or a discovery Pi process, plus bare builtin names; builtins win name collisions and remain if discovery fails) |
 | `execute_pi_command` | `PiSessionManager.executeCommand()` — known Pi builtins (`/compact`, `/name`, `/session`, `/export` HTML, desktop uiActions). Unknown/extension/prompt/skill text returns `handled: false`. Terminal-only builtins return guidance and are not sent to the model. |
 | `list_provider_catalog` | `ProviderSettingsManager` + `listLocalProviders` |

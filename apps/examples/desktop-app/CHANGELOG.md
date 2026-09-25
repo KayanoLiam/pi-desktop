@@ -9,16 +9,20 @@ First public beta of **Pi**, a native desktop app for the [Pi](https://github.co
 - Chat through your installed Pi: each thread is a `pi --mode rpc` process started from the thread's workspace with the provider, model and thinking level you pick. Answers and thinking stream live; `bash`, `read`, `edit`, `write`, `grep` and extension tools show as tool cards with live output; token usage and cost come from Pi
 - Tool approvals are opt-in: tools run without asking by default, like the Pi CLI. Flip the composer's shield to **Ask first** and every tool call waits for you; the switch works mid-session
 - Extension dialogs (`select`, `input`, `confirm`, `editor`) appear as question cards in the chat
-- Stop a running turn; messages sent while Pi is busy queue as follow-ups
+- Stop a running turn. Messages sent while Pi is busy wait in a queue, images included, and go out one by one when Pi finishes; edit, remove, or steer any of them into the running turn. Stopping your own turn lets the queue continue; stopping a queued turn clears the rest
+- Edit one of your earlier messages to fork the session from just before it: a new Pi session opens with your edited text in the composer, and the original stays as it was. **Fork** copies the whole session
+- `/tree` shows the whole Pi session tree and switches branches without a model turn; picking an earlier message of yours puts its text back in the composer so sending starts a new branch
+- **Ctrl+P** cycles through Pi's scoped models on a live thread, and `/scoped-models` chooses which models are in that cycle, for the current session or saved to Pi's `enabledModels`
+- **Extensions → Installed** lists the extensions your global and project Pi configuration resolve; enable or disable each one, or uninstall an npm or git package after confirmation. The app never installs or updates packages
 - Pi session history from `~/.pi/agent/sessions` appears in the sidebar. Open, continue, rename or delete sessions; they also show up in `pi /resume`
-- Pi's slash commands: typing `/` lists extension commands, prompt templates, skills, and a small builtin fallback (`/compact`, `/name`, `/new`, `/model`, `/settings`, `/resume`) if discovery fails. Submitting a Pi slash command asks the sidecar before a chat turn. `/compact` can refresh the open transcript; `/name` updates the title, `/session` shows statistics, and `/export` writes HTML. `/new`, `/model`, `/settings`, and `/resume` open existing desktop controls and do not need a live Pi process. Unsupported builtins show guidance instead of being sent to the model
+- Pi's slash commands: typing `/` lists extension commands, prompt templates, skills, and a small builtin fallback (`/compact`, `/name`, `/new`, `/model`, `/settings`, `/resume`) if discovery fails. Submitting a Pi slash command asks the sidecar before a chat turn. `/compact` can refresh the open transcript; `/name` updates the title, `/session` shows statistics, `/copy` copies the last response, `/export` writes HTML, and `/model <model>` and `/thinking <level>` apply their argument. `/new`, `/model`, `/thinking`, `/settings`, and `/resume` open existing desktop controls and do not need a live Pi process. Unsupported builtins show guidance instead of being sent to the model
 - Your configured Pi models, filtered by `enabledModels`, with per-provider model memory and per-model thinking levels
 - Light and dark themes, a local-first entry screen, no account or sign-in
 - Proxy settings from your shell profile (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are picked up when the app is launched from the Dock, so Pi reaches model APIs the same way it does from a terminal
 
-**Install (macOS, Apple Silicon)**
+**Install**
 
-Download the DMG, drag **Pi** to Applications. This beta is **not notarized**, so macOS blocks the first launch. Either open **System Settings → Privacy & Security** and choose **Open Anyway**, or run:
+On a Mac, download the DMG for your chip (`aarch64` for Apple Silicon, `x64` for Intel) and drag **Pi** to Applications. This beta is **not notarized**, so macOS blocks the first launch. Either open **System Settings → Privacy & Security** and choose **Open Anyway**, or run:
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/Pi.app"
@@ -26,9 +30,9 @@ xattr -dr com.apple.quarantine "/Applications/Pi.app"
 
 **Known limitations**
 
-- Apple Silicon only. No Intel, Windows or Linux builds yet
+- The Intel Mac, Windows (NSIS `.exe`) and Linux (`.deb`, `.rpm`) installers are unsigned test builds that have only been verified to package, not to run. On Linux the app and package are named **Pi Desktop** / `pi-desktop`, because Ubuntu already has an unrelated `pi` package
 - No auto-update: install new betas by downloading them
-- Not yet: Pi's `/fork`, `/clone`, `/tree`, and the rest of the TUI slash pickers; forking or editing earlier messages of a Pi thread; editing or removing a single queued message; file checkpoints; and SSH remote threads (those still run on the inherited Cline runtime). Desktop Settings opened by `/settings` is the app settings view, not every Pi preference. Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features
+- Not yet: Pi's own message pickers for `/fork` and `/clone` (use **Edit** and **Fork** in the transcript), file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). Desktop Settings opened by `/settings` is the app settings view, not every Pi preference. The **Automations** sidebar entry is an inherited UI surface, not a Pi feature
 - Settings and session data still live under `~/.cline/data` for the inherited parts of the app
 
 ---

@@ -71,9 +71,10 @@ this path; `sidecar/ARCHITECTURE.md` describes the design. In short:
   question cards; `notify` becomes a transcript log entry; `setStatus`,
   `setWidget`, `setTitle` and `set_editor_text` are ignored.
 - **Stop** sends Pi's `abort`; if Pi does not answer within ten seconds the
-  process is killed. Prompts sent while a turn runs are queued as Pi
-  follow-ups. Idle processes are reaped after ten minutes and relaunched on the
-  session file when needed.
+  process is killed. Idle processes are reaped after ten minutes and relaunched
+  on the session file when needed.
+- Prompts sent while a turn runs wait in a queue the sidecar holds (see
+  "Queued prompts" below), not in Pi's own follow-up queue.
 - Pi session history is read directly from the JSONL files (never through
   Pi's `SessionManager.open()`, which rewrites old versions). The active branch
   is projected into the transcript shape: tool calls pair with their results,
@@ -111,12 +112,51 @@ Without arguments, `/new`, `/model`, `/thinking`, `/settings`, and `/resume`
 open the new-thread action, the model and thinking pickers, desktop Settings,
 and session search; they do not require a live Pi process and are not Pi's
 full TUI pickers. `/tree` and `/scoped-models` open the dialogs described
-below. `/fork` stays guidance: desktop fork is disabled for Pi threads and Pi's
-message picker is not available. Other builtins such as `/clone`, `/share`,
-`/import`, and `/reload` show guidance instead of running or uploading
-anything. Extension, skill, and prompt commands that the endpoint reports as
+below. `/fork` and `/clone` show guidance that points at the transcript's
+**Edit** and **Fork** actions (Pi's message picker is not available). Other
+builtins such as `/share`, `/import`, and `/reload` show guidance instead of
+running or uploading anything. Extension, skill, and prompt commands that the endpoint reports as
 unhandled still follow the normal prompt path. A transport error keeps the
 draft and attachments. A handled command clears only the command text.
+
+### Queued prompts
+
+Prompts sent while Pi is busy stay in the sidecar with their images and
+attached files, and the next one is sent as a new turn once Pi settles. Pi's own
+follow-up queue is not used for them: Pi can only clear that queue as a whole
+and reports it as plain text, so single items could not be edited or removed
+and their images would be lost. The queue actions follow Cline's pending
+prompts:
+
+- **Edit** replaces the text and keeps images and files. **Remove** also deletes
+  the prompt's materialized attachments.
+- **Steer** (or Enter on an empty composer for the first item) hands a prompt to
+  Pi's steering queue while it runs, or sends it at once when Pi is idle.
+- Stopping your own turn keeps the queue, and it continues once the stop
+  settles. Stopping a queued turn clears the rest, so Stop always halts the
+  session. A failed turn holds the queue until the next prompt, edit, steer, or
+  successful turn.
+- Entries already in Pi's own queue (a steered prompt, or follow-ups an
+  extension queued) are shown but read-only. If the Pi process exits, queued
+  prompts are dropped with a notice in the transcript.
+
+### Edit and fork
+
+**Edit** on one of your earlier messages forks the session before it with Pi's
+`fork` and opens the new session with the edited text as a draft, like Cline and
+Pi's `/fork`; the original session is not changed. **Fork** copies the whole
+session with Pi's `clone`. Both are refused while Pi is busy or queued prompts
+wait.
+
+The message is located on the current branch of Pi's live tree: by its
+transcript id (Pi's entry id once the session is loaded from disk), otherwise by
+its turn number, since a just-sent message only has an optimistic id. Pi's
+`get_fork_messages` cannot be used for this because it lists every branch. Pi
+rebinds its process to the new session, so the live process moves to the new
+id and the original thread relaunches from its file on the next send. A fork
+from before the first message has no file until Pi's first reply; until then the
+sidecar keeps its config like any new session. Pi records the new session's
+`parentSession`, but the sidebar does not show that link yet.
 
 ### Session tree (`/tree`)
 
@@ -170,10 +210,8 @@ Pi process.
   [pi.dev/packages](https://pi.dev/packages) for browsing. The inherited Cline marketplace route was removed from Settings;
   the Cline inventory data and services are left in place.
 
-Not supported for Pi threads yet: fork, the transcript's inline message editing
-(`/tree` re-edit is the supported path), file checkpoints, editing or removing
-one queued message (only stop-and-resend), and SSH remote environments (they
-stay on the Cline runtime).
+Not supported for Pi threads yet: file checkpoints and SSH remote environments
+(they stay on the Cline runtime).
 
 ## Pi model selection
 
@@ -264,7 +302,7 @@ PI_DESKTOP_PI_BIN=/nonexistent-pi-test bun x vitest run \
   webview/components/views/chat/chat-input-bar.test.tsx \
   webview/hooks/use-chat-session.test.tsx \
   webview/hooks/chat-session/helpers.test.ts \
-  webview/lib/theme.test.ts \
+  webview/lib/theme.test.ts webview/lib/desktop-window-title.test.ts \
   --config vitest.config.ts
 
 # Keep Vitest and Bun-only suites in their respective runners
@@ -299,11 +337,14 @@ script suites passed. Biome still reports the inherited findings in untouched
 files. Rust checks were not re-run in this step. These are local results, not
 passing desktop GitHub CI.
 
-**Later spot check (macOS, commit `fbd38ff79`):** only the focused Pi command
-above was run: 18 files, 369 passing and 1 failing test. The failure is
-deterministic: `pi-model-selector.test.tsx` › "seeds a resumed session's
-recorded model and keeps it when the catalog lacks it". The full suite,
-typechecks, builds and Rust checks were not re-run at this commit.
+**Latest run (macOS, commit `96c331f75`, queue and fork work):** full Vitest
+1662 passing and the same 3 inherited failures; the focused Pi command above
+389 passing; `test:sidecar` 1185 passing plus the worktree failure,
+`test:chat-ui` 143 and `test:settings-ui` 59 passing; the Bun script suites
+16 passing. Sidecar `typecheck`, `build:web` and `build:sidecar` passed.
+Webview TypeScript reported 109 diagnostics: the 107 above plus 2 in
+`pi-tree-dialog.test.tsx` from the `/tree` commit, none from this work. Rust
+checks were not re-run (no Rust changes).
 
 ### Checking webview changes
 
@@ -543,7 +584,11 @@ Windows (`bunx tauri build --bundles nsis`; Tauri's WiX/MSI bundler rejects the
 `0.1.0-beta.1` version) and Linux (`--bundles deb,rpm`; AppImage fails on the
 runner). On Windows it seeds Bun's cache with the version-matched Linux
 runtimes from Bun's official release ZIPs, because Bun's own cross-compile
-extraction for the bundled SSH helpers fails there. Installers are uploaded as
+extraction for the bundled SSH helpers fails there. On Linux the product name
+is **Pi Desktop** (`src-tauri/tauri.linux.conf.json`), so the deb package is
+`pi-desktop` rather than `pi`, which Ubuntu already uses for an unrelated
+package; the job fails otherwise, and artifact names use `Pi-Desktop`.
+Installers are uploaded as
 workflow artifacts (30-day retention). The workflow only checks that each
 installer exists: it does not sign, notarize, run tests or the app, publish a
 release, or update any updater feed.
