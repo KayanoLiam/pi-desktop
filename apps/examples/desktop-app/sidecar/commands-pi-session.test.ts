@@ -316,6 +316,51 @@ describe("Pi thread command routing", () => {
 		expect(ctx.pi?.status("session_1_new")).toBe("idle");
 	});
 
+	it("routes queued-prompt edits for Pi threads to the Pi session manager", async () => {
+		await handleCommand(ctx, "chat_session_command", {
+			request: {
+				action: "start",
+				config: {
+					runtime: "pi",
+					sessionId: "session_queue",
+					environmentId: "local",
+					provider: "openai-codex",
+					model: "gpt-5.6-luna",
+					cwd: dir,
+				},
+			},
+		});
+		for (const action of [
+			"steer_prompt",
+			"update_pending_prompt",
+			"remove_pending_prompt",
+		] as const) {
+			expect(
+				await handleCommand(ctx, "chat_session_command", {
+					request: {
+						action,
+						sessionId: "session_queue",
+						promptId: "pi_q_missing",
+						prompt: "edited",
+						config: { environmentId: "local" },
+					},
+				}),
+			).toMatchObject({ sessionId: "session_queue", promptsInQueue: [] });
+		}
+		await expect(
+			handleCommand(ctx, "chat_session_command", {
+				request: {
+					action: "update_pending_prompt",
+					sessionId: "session_queue",
+					promptId: "pi:followUp:0",
+					prompt: "edited",
+					config: { environmentId: "local" },
+				},
+			}),
+		).rejects.toThrow(/already handed to Pi/);
+		expect(ctx.runtimeBindings.size).toBe(0);
+	});
+
 	it("lists, reads, renames, annotates, searches, and deletes Pi sessions from the store", async () => {
 		const path = writePiSession("pi-old-1", dir, "Old name");
 		const listed = (await handleCommand(ctx, "list_discovered_sessions", {

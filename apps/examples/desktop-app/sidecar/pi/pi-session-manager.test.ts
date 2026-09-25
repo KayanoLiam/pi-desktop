@@ -1,6 +1,7 @@
 import {
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -47,6 +48,76 @@ function events(name: string): Array<Record<string, unknown>> {
 	return sent
 		.filter((event) => event.name === name)
 		.map((event) => event.payload);
+}
+
+type QueueResult = {
+	queued: boolean;
+	promptsInQueue: Array<Record<string, unknown>>;
+};
+
+const IMAGE = "data:image/png;base64,AAAA";
+
+function receivedPrompts(): Array<Record<string, unknown>> {
+	return fake.received().filter((line) => line.type === "prompt");
+}
+
+function queueItems(): Array<Record<string, unknown>> {
+	return (events("prompts_in_queue_state").at(-1)?.items ?? []) as Array<
+		Record<string, unknown>
+	>;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function startSession(sessionId: string): Promise<void> {
+	await manager.handle({
+		action: "start",
+		config: {
+			runtime: "pi",
+			sessionId,
+			provider: "p",
+			model: "m",
+			cwd: dir,
+		},
+	});
+}
+
+/** A turn that stays busy for `ticks` × 25 ms and stops early when aborted. */
+function slowTurnEvents(
+	options: { ticks?: number; stopReason?: string; errorMessage?: string } = {},
+): unknown[] {
+	return [
+		{ type: "agent_start" },
+		{
+			type: "message_start",
+			message: { role: "user", content: "{{prompt}}", timestamp: 1 },
+		},
+		...Array.from({ length: options.ticks ?? 8 }, () => ({ __wait__: 25 })),
+		{
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "Done: {{prompt}}" }],
+				api: "x",
+				provider: "p",
+				model: "m",
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: options.stopReason ?? "stop",
+				...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+				timestamp: 1,
+			},
+		},
+		{ type: "agent_end", messages: [], willRetry: false },
+	];
 }
 
 function createManager(
@@ -639,57 +710,307 @@ describe("PiSessionManager", () => {
 		expect(manager.status("s-abort")).toBe("idle");
 	});
 
-	it("queues prompts sent while a turn runs and announces them when Pi starts them", async () => {
-		createManager({
-			promptEvents: [
-				{ type: "agent_start" },
-				// Pi echoes the direct prompt's own user message first; only the
-				// queued follow-up that starts later is news to the webview.
-				{
-					type: "message_start",
-					message: { role: "user", content: "{{prompt}}", timestamp: 1 },
-				},
-				{ __wait__: 150 },
-				{
-					type: "message_start",
-					message: { role: "user", content: "later", timestamp: 2 },
-				},
-				{ type: "agent_end", messages: [], willRetry: false },
-			],
-		});
-		await manager.handle({
-			action: "start",
-			config: {
-				runtime: "pi",
-				sessionId: "s-queue",
-				provider: "p",
-				model: "m",
-				cwd: dir,
-			},
-		});
+	it("holds prompts sent during a turn and sends them in order once Pi settles", async () => {
+		createManager({ promptEvents: slowTurnEvents() });
+		await startSession("s-queue");
 		const first = manager.handle({
 			action: "send",
 			sessionId: "s-queue",
 			prompt: "first",
 		});
-		await waitFor(() => events("chat_session_status").length === 1);
-		const queued = (await manager.handle({
+		await waitFor(() => manager.status("s-queue") === "running");
+		const second = (await manager.handle({
 			action: "send",
 			sessionId: "s-queue",
-			prompt: "later",
-		})) as { queued: boolean; promptsInQueue: unknown[] };
-		expect(queued.queued).toBe(true);
+			prompt: "second",
+			attachments: { userImages: [IMAGE] },
+		})) as QueueResult;
+		expect(second.queued).toBe(true);
+		expect(second.promptsInQueue).toEqual([
+			{
+				id: expect.stringMatching(/^pi_q_/),
+				prompt: "second",
+				steer: false,
+				attachmentCount: 1,
+				userImages: [IMAGE],
+			},
+		]);
+		await manager.handle({
+			action: "send",
+			sessionId: "s-queue",
+			prompt: "third",
+		});
+		// Nothing reaches Pi's own follow-up queue while the first turn runs.
+		expect(receivedPrompts().map((line) => line.message)).toEqual(["first"]);
 		await first;
-		const followUp = fake
-			.received()
-			.find((line) => line.type === "prompt" && line.message === "later");
-		expect(followUp).toMatchObject({ streamingBehavior: "followUp" });
+		await waitFor(() => chunkJson("chat_done").length === 3);
+		const prompts = receivedPrompts();
+		expect(prompts.map((line) => line.message)).toEqual([
+			"first",
+			"second",
+			"third",
+		]);
+		expect(prompts.map((line) => line.streamingBehavior)).toEqual([
+			undefined,
+			undefined,
+			undefined,
+		]);
+		expect(prompts[1]?.images).toEqual([
+			{ type: "image", data: "AAAA", mimeType: "image/png" },
+		]);
+		// Announced once each, with the queue id and images the webview shows.
 		expect(chunkJson("chat_queued_prompt_start")).toEqual([
-			{ promptId: "pi_s-queue_1", prompt: "later", attachmentCount: 0 },
+			{
+				promptId: second.promptsInQueue[0]?.id,
+				prompt: "second",
+				attachmentCount: 1,
+				userImages: [IMAGE],
+			},
+			{
+				promptId: expect.stringMatching(/^pi_q_/),
+				prompt: "third",
+				attachmentCount: 0,
+			},
 		]);
 		expect(events("prompts_in_queue_state").at(-1)).toMatchObject({
-			items: [{ id: "followUp:0", prompt: "later", steer: false }],
+			sessionId: "s-queue",
+			items: [],
 		});
+		await waitFor(() => manager.status("s-queue") === "idle");
+	});
+
+	it("edits and removes queued prompts and deletes removed attachments", async () => {
+		createManager({ promptEvents: slowTurnEvents() });
+		await startSession("s-edit");
+		const first = manager.handle({
+			action: "send",
+			sessionId: "s-edit",
+			prompt: "first",
+		});
+		await waitFor(() => manager.status("s-edit") === "running");
+		const draft = (await manager.handle({
+			action: "send",
+			sessionId: "s-edit",
+			prompt: "draft",
+			attachments: { userImages: [IMAGE] },
+		})) as QueueResult;
+		const dropped = (await manager.handle({
+			action: "send",
+			sessionId: "s-edit",
+			prompt: "drop me",
+			attachments: { userFiles: [{ name: "notes.txt", content: "secret" }] },
+		})) as QueueResult;
+		const draftId = String(draft.promptsInQueue[0]?.id);
+		const droppedId = String(dropped.promptsInQueue[1]?.id);
+		const attachmentDir = join(
+			dir,
+			"session-data",
+			"s-edit",
+			"user-attachments",
+		);
+		expect(readdirSync(attachmentDir)).toHaveLength(1);
+
+		expect(
+			await manager.handle({
+				action: "update_pending_prompt",
+				sessionId: "s-edit",
+				promptId: draftId,
+				prompt: "edited",
+			}),
+		).toMatchObject({
+			updated: true,
+			promptsInQueue: [
+				{ id: draftId, prompt: "edited", userImages: [IMAGE] },
+				{ id: droppedId, prompt: "drop me" },
+			],
+		});
+		await expect(
+			manager.handle({
+				action: "update_pending_prompt",
+				sessionId: "s-edit",
+				promptId: draftId,
+				prompt: "/compact",
+			}),
+		).rejects.toThrow(/execute_pi_command/);
+		await expect(
+			manager.handle({
+				action: "remove_pending_prompt",
+				sessionId: "s-edit",
+				promptId: "pi:followUp:0",
+			}),
+		).rejects.toThrow(/already handed to Pi/);
+		expect(
+			await manager.handle({
+				action: "remove_pending_prompt",
+				sessionId: "s-edit",
+				promptId: droppedId,
+			}),
+		).toMatchObject({
+			removed: true,
+			prompt: { id: droppedId, prompt: "drop me", attachmentCount: 1 },
+			promptsInQueue: [{ id: draftId }],
+		});
+		expect(readdirSync(attachmentDir)).toEqual([]);
+
+		await first;
+		await waitFor(() => chunkJson("chat_done").length === 2);
+		expect(receivedPrompts().map((line) => line.message)).toEqual([
+			"first",
+			"edited",
+		]);
+		expect(receivedPrompts()[1]?.images).toEqual([
+			{ type: "image", data: "AAAA", mimeType: "image/png" },
+		]);
+	});
+
+	it("steers a queued prompt into the running turn exactly once", async () => {
+		createManager({ promptEvents: slowTurnEvents() });
+		await startSession("s-steer");
+		const first = manager.handle({
+			action: "send",
+			sessionId: "s-steer",
+			prompt: "first",
+		});
+		await waitFor(() => manager.status("s-steer") === "running");
+		const queued = (await manager.handle({
+			action: "send",
+			sessionId: "s-steer",
+			prompt: "now please",
+		})) as QueueResult;
+		expect(
+			await manager.handle({
+				action: "steer_prompt",
+				sessionId: "s-steer",
+				promptId: String(queued.promptsInQueue[0]?.id),
+			}),
+		).toMatchObject({ updated: true });
+		expect(receivedPrompts().at(-1)).toMatchObject({
+			message: "now please",
+			streamingBehavior: "steer",
+		});
+		// Pi now owns it and reports it through its own queue: read-only here.
+		await waitFor(() =>
+			queueItems().some((item) => item.id === "pi:steer:0" && item.steer),
+		);
+		await first;
+		await sleep(100);
+		expect(
+			receivedPrompts().filter((line) => line.message === "now please"),
+		).toHaveLength(1);
+	});
+
+	it("keeps the queue when the user's turn is stopped and drops it when a queued turn is stopped", async () => {
+		createManager({ promptEvents: slowTurnEvents({ ticks: 200 }) });
+		await startSession("s-stop");
+		const first = manager.handle({
+			action: "send",
+			sessionId: "s-stop",
+			prompt: "first",
+		});
+		await waitFor(() => manager.status("s-stop") === "running");
+		await manager.handle({ action: "send", sessionId: "s-stop", prompt: "q1" });
+		await manager.handle({ action: "send", sessionId: "s-stop", prompt: "q2" });
+
+		await manager.handle({ action: "abort", sessionId: "s-stop" });
+		expect(
+			((await first) as { result: { finishReason: string } }).result
+				.finishReason,
+		).toBe("aborted");
+		// Stopping the user's own turn lets the queue continue.
+		await waitFor(() =>
+			receivedPrompts().some((line) => line.message === "q1"),
+		);
+		expect(chunkJson("chat_queued_prompt_start")).toMatchObject([
+			{ prompt: "q1" },
+		]);
+
+		// Stopping the queued turn cancels the queued work itself.
+		await manager.handle({ action: "abort", sessionId: "s-stop" });
+		await waitFor(() => chunkJson("chat_done").length === 2);
+		expect(chunkJson("chat_done").at(-1)).toMatchObject({ reason: "aborted" });
+		expect(queueItems()).toEqual([]);
+		await sleep(100);
+		expect(receivedPrompts().map((line) => line.message)).toEqual([
+			"first",
+			"q1",
+		]);
+		expect(manager.status("s-stop")).toBe("idle");
+	});
+
+	it("holds the queue after a failed turn until the user steers or edits it", async () => {
+		createManager({
+			promptEvents: slowTurnEvents({
+				stopReason: "error",
+				errorMessage: "provider down",
+			}),
+		});
+		await startSession("s-hold");
+		const first = manager.handle({
+			action: "send",
+			sessionId: "s-hold",
+			prompt: "first",
+		});
+		await waitFor(() => manager.status("s-hold") === "running");
+		await manager.handle({ action: "send", sessionId: "s-hold", prompt: "q1" });
+		const q2 = (await manager.handle({
+			action: "send",
+			sessionId: "s-hold",
+			prompt: "q2",
+		})) as QueueResult;
+		expect(
+			((await first) as { result: { finishReason: string } }).result
+				.finishReason,
+		).toBe("error");
+		await sleep(100);
+		expect(receivedPrompts().map((line) => line.message)).toEqual(["first"]);
+		expect(manager.status("s-hold")).toBe("idle");
+
+		// Steering while idle starts the first queued prompt now; it fails too,
+		// so the rest stays held.
+		expect(
+			await manager.handle({ action: "steer_prompt", sessionId: "s-hold" }),
+		).toMatchObject({ updated: true });
+		await waitFor(() => chunkJson("chat_done").length === 2);
+		await sleep(100);
+		expect(receivedPrompts().map((line) => line.message)).toEqual([
+			"first",
+			"q1",
+		]);
+
+		// Editing the held queue releases it.
+		await manager.handle({
+			action: "update_pending_prompt",
+			sessionId: "s-hold",
+			promptId: String(q2.promptsInQueue[1]?.id),
+			prompt: "q2 again",
+		});
+		await waitFor(() =>
+			receivedPrompts().some((line) => line.message === "q2 again"),
+		);
+	});
+
+	it("drops queued prompts with a notice when Pi exits", async () => {
+		createManager({ promptEvents: slowTurnEvents({ ticks: 200 }) });
+		await startSession("s-exit");
+		const first = manager.handle({
+			action: "send",
+			sessionId: "s-exit",
+			prompt: "first",
+		});
+		await waitFor(() => manager.status("s-exit") === "running");
+		await manager.handle({
+			action: "send",
+			sessionId: "s-exit",
+			prompt: "lost",
+			attachments: { userFiles: [{ name: "a.txt", content: "x" }] },
+		});
+		await manager.handle({ action: "stop", sessionId: "s-exit" });
+		await first;
+		expect(queueItems()).toEqual([]);
+		expect(
+			readdirSync(join(dir, "session-data", "s-exit", "user-attachments")),
+		).toEqual([]);
+		expect(manager.isLive("s-exit")).toBe(false);
 	});
 
 	it("hands the prompt back when Pi rejects it before acceptance", async () => {

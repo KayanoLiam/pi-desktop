@@ -92,6 +92,8 @@ type RunResult = {
 type ActiveRun = {
 	/** The prompt sent while idle; its user message_start must not re-announce it. */
 	directPromptPending: boolean;
+	/** Started from the desktop queue; aborting it discards the rest of the queue. */
+	fromQueue: boolean;
 	aborted: boolean;
 	errorMessage?: string;
 	lastAssistantText: string;
@@ -128,6 +130,27 @@ function findPiTreeNode(
 	return undefined;
 }
 
+type PiImage = { type: "image"; data: string; mimeType: string };
+
+/**
+ * A prompt sent while Pi is busy. The desktop holds it rather than Pi's own
+ * follow-up queue: Pi can only clear that queue as a whole and reports it as
+ * plain text, so single items could not be edited or removed and their images
+ * would be lost.
+ */
+type PiQueuedPrompt = {
+	id: string;
+	/** What the user typed; shown in the queue and edited in place. */
+	prompt: string;
+	/** What Pi receives: the prompt plus the materialized-files note. */
+	message: string;
+	images: PiImage[];
+	/** Data URLs, so the transcript can show the images when the prompt starts. */
+	userImages: string[];
+	materialized?: string[];
+	attachmentCount: number;
+};
+
 type PiLiveSession = {
 	sessionId: string;
 	process: PiRpcProcess;
@@ -146,8 +169,18 @@ type PiLiveSession = {
 	stale: boolean;
 	lastActivityAt: number;
 	run: ActiveRun | null;
+	/** Pi's own queue (steered prompts, extension follow-ups); read-only here. */
 	queue: { steering: string[]; followUp: string[] };
 	queuedPromptCounter: number;
+	/** Prompts waiting for Pi to become idle; see PiQueuedPrompt. */
+	pending: PiQueuedPrompt[];
+	pendingCounter: number;
+	/** A turn failed: keep the queue until the next enqueue, edit, steer or successful turn. */
+	queueHeld: boolean;
+	/** Queued prompts steered into Pi's queue, announced when Pi starts them. */
+	handedToPi: PiQueuedPrompt[];
+	/** Attachments of prompts handed to Pi, deleted once the turn settles. */
+	deferredAttachments: string[][];
 	toolOutputs: Map<string, string>;
 	toolNames: Map<string, string>;
 	pendingUi: Set<string>;
@@ -177,6 +210,55 @@ const DISCOVERY_TIMEOUT_MS = 30_000;
 const DEFAULT_COMPACT_TIMEOUT_MS = 5 * 60_000;
 const IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i;
 const PI_TREE_JUMP_COMMAND = "/__pi_desktop_tree_jump";
+/** Queue ids for prompts already in Pi's own queue (read-only). */
+const PI_OWNED_QUEUE_PREFIX = "pi:";
+
+function piImages(userImages: string[]): PiImage[] {
+	return userImages.flatMap((image) => {
+		const match = IMAGE_DATA_URL.exec(image.trim());
+		return match
+			? [{ type: "image" as const, data: match[2], mimeType: match[1] }]
+			: [];
+	});
+}
+
+function composePiMessage(
+	prompt: string,
+	materialized: string[] | undefined,
+): string {
+	return materialized?.length
+		? `${prompt}${prompt ? "\n\n" : ""}Attached files (read them with the read tool):\n${materialized
+				.map((path) => `- ${path}`)
+				.join("\n")}`
+		: prompt;
+}
+
+function assertPromptIsNotCommand(prompt: string): void {
+	if (prompt.split(/\s+/, 1)[0] === PI_TREE_JUMP_COMMAND) {
+		throw new Error("Use /tree to navigate Pi sessions.");
+	}
+	// Known builtins never become a model turn. Interactive Pi runs them
+	// before extension/template expansion, so a colliding extension must not
+	// win by falling through to RPC `prompt`.
+	const builtin = piBuiltinCommandName(prompt);
+	if (builtin) {
+		throw new Error(
+			`Builtin Pi command /${builtin} must be handled via execute_pi_command, not sent as a prompt.`,
+		);
+	}
+}
+
+function queuedPromptItem(item: PiQueuedPrompt): PromptInQueue {
+	return {
+		id: item.id,
+		prompt: item.prompt,
+		steer: false,
+		...(item.attachmentCount > 0
+			? { attachmentCount: item.attachmentCount }
+			: {}),
+		...(item.userImages.length > 0 ? { userImages: item.userImages } : {}),
+	};
+}
 
 export function getPiSessionManager(ctx: SidecarContext): PiSessionManager {
 	const owner = getOwnerContext(ctx);
@@ -296,6 +378,12 @@ export class PiSessionManager {
 				return this.reset(request);
 			case "pending_prompts":
 				return this.pendingPrompts(request);
+			case "steer_prompt":
+				return this.steerPrompt(request);
+			case "update_pending_prompt":
+				return this.updatePendingPrompt(request);
+			case "remove_pending_prompt":
+				return this.removePendingPrompt(request);
 			default:
 				throw new Error(
 					`${request.action} is not supported for Pi sessions yet`,
@@ -367,18 +455,7 @@ export class PiSessionManager {
 		if (!prompt && userImages.length === 0 && userFiles.length === 0) {
 			throw new Error("prompt or attachment is required");
 		}
-		if (prompt.split(/\s+/, 1)[0] === PI_TREE_JUMP_COMMAND) {
-			throw new Error("Use /tree to navigate Pi sessions.");
-		}
-		// Known builtins never become a model turn. Interactive Pi runs them
-		// before extension/template expansion, so a colliding extension must not
-		// win by falling through to RPC `prompt`.
-		const builtin = piBuiltinCommandName(prompt);
-		if (builtin) {
-			throw new Error(
-				`Builtin Pi command /${builtin} must be handled via execute_pi_command, not sent as a prompt.`,
-			);
-		}
+		assertPromptIsNotCommand(prompt);
 		let live = this.live.get(sessionId);
 		if (!live) {
 			const summary = this.files.findById(sessionId);
@@ -407,31 +484,45 @@ export class PiSessionManager {
 			);
 		}
 		live.lastActivityAt = Date.now();
-		const images = userImages.flatMap((image) => {
-			const match = IMAGE_DATA_URL.exec(image.trim());
-			return match
-				? [{ type: "image" as const, data: match[2], mimeType: match[1] }]
-				: [];
-		});
+		const images = piImages(userImages);
 		const materialized = materializeUserFiles(sessionId, userFiles);
-		const message = materialized?.length
-			? `${prompt}${prompt ? "\n\n" : ""}Attached files (read them with the read tool):\n${materialized
-					.map((path) => `- ${path}`)
-					.join("\n")}`
-			: prompt;
+		const message = composePiMessage(prompt, materialized);
+		const session = live;
+		const queued = (): unknown => {
+			this.enqueue(session, {
+				prompt,
+				message,
+				images,
+				userImages,
+				materialized,
+				attachmentCount: userImages.length + userFiles.length,
+			});
+			return {
+				sessionId,
+				ok: true,
+				queued: true,
+				promptsInQueue: this.queueSnapshot(session),
+			};
+		};
+		// Queue behind a running turn, and behind prompts still waiting to drain
+		// so a new prompt cannot overtake them.
 		const delivery =
-			request.delivery ?? (live.busy || live.run ? "queue" : undefined);
-		if (delivery === "queue" || delivery === "steer") {
+			request.delivery ??
+			(live.busy || live.run || (live.pending.length > 0 && !live.queueHeld)
+				? "queue"
+				: undefined);
+		if (delivery === "steer") {
 			const accepted = await live.process.request({
 				type: "prompt",
 				message,
 				...(images.length > 0 ? { images } : {}),
-				streamingBehavior: delivery === "steer" ? "steer" : "followUp",
+				streamingBehavior: "steer",
 			});
 			if (!accepted.success) {
 				deleteMaterializedAttachments(sessionId, materialized);
 				throw new Error(accepted.error);
 			}
+			if (materialized?.length) live.deferredAttachments.push(materialized);
 			return {
 				sessionId,
 				ok: true,
@@ -439,6 +530,7 @@ export class PiSessionManager {
 				promptsInQueue: this.queueSnapshot(live),
 			};
 		}
+		if (delivery === "queue") return queued();
 		const run = this.beginRun(live);
 		this.ctx.logger?.debug("Sending Pi prompt", {
 			sessionId,
@@ -468,22 +560,11 @@ export class PiSessionManager {
 		}
 		if (!accepted.success) {
 			if (/streaming/i.test(accepted.error)) {
-				// Lost the race with a run Pi started meanwhile: queue instead.
+				// Lost the race with a run Pi started meanwhile (an extension
+				// command): Pi is busy, so queue behind it.
 				this.finishRun(live, { finishReason: "completed", silent: true });
-				const queued = await live.process.request({
-					type: "prompt",
-					message,
-					...(images.length > 0 ? { images } : {}),
-					streamingBehavior: "followUp",
-				});
-				if (queued.success) {
-					return {
-						sessionId,
-						ok: true,
-						queued: true,
-						promptsInQueue: this.queueSnapshot(live),
-					};
-				}
+				this.setBusy(live, true);
+				return queued();
 			}
 			this.finishRun(live, {
 				finishReason: "error",
@@ -553,6 +634,131 @@ export class PiSessionManager {
 			sessionId,
 			promptsInQueue: live ? this.queueSnapshot(live) : [],
 		};
+	}
+
+	/** Send a queued prompt now: into the running turn, or as the next turn when idle. */
+	async steerPrompt(request: ChatSessionCommandRequest): Promise<unknown> {
+		const sessionId = request.sessionId?.trim();
+		const promptId = request.promptId?.trim();
+		if (!sessionId) throw new Error("sessionId is required");
+		if (request.promptId !== undefined && !promptId)
+			throw new Error("promptId cannot be empty");
+		const live = this.live.get(sessionId);
+		if (!live) return { sessionId, updated: false, promptsInQueue: [] };
+		const index = this.pendingIndex(live, promptId);
+		const item = index >= 0 ? live.pending[index] : undefined;
+		if (!item) {
+			return {
+				sessionId,
+				updated: false,
+				promptsInQueue: this.queueSnapshot(live),
+			};
+		}
+		live.pending.splice(index, 1);
+		live.queueHeld = false;
+		if (live.busy || live.run) {
+			live.handedToPi.push(item);
+			this.broadcastQueue(live);
+			const accepted = await live.process.request({
+				type: "prompt",
+				message: item.message,
+				...(item.images.length > 0 ? { images: item.images } : {}),
+				streamingBehavior: "steer",
+			});
+			if (!accepted.success) {
+				live.handedToPi = live.handedToPi.filter((entry) => entry !== item);
+				live.pending.splice(index, 0, item);
+				this.broadcastQueue(live);
+				throw new Error(accepted.error);
+			}
+			if (item.materialized?.length)
+				live.deferredAttachments.push(item.materialized);
+		} else {
+			live.pending.unshift(item);
+			this.drainQueue(live);
+		}
+		return {
+			sessionId,
+			updated: true,
+			promptsInQueue: this.queueSnapshot(live),
+		};
+	}
+
+	async updatePendingPrompt(
+		request: ChatSessionCommandRequest,
+	): Promise<unknown> {
+		const sessionId = request.sessionId?.trim();
+		const promptId = request.promptId?.trim();
+		const prompt = request.prompt?.trim();
+		if (!sessionId || !promptId) {
+			throw new Error("sessionId and promptId are required");
+		}
+		if (!prompt) throw new Error("prompt is required");
+		assertPromptIsNotCommand(prompt);
+		const live = this.live.get(sessionId);
+		if (!live) return { sessionId, updated: false, promptsInQueue: [] };
+		const item = live.pending[this.pendingIndex(live, promptId)];
+		if (!item) {
+			return {
+				sessionId,
+				updated: false,
+				promptsInQueue: this.queueSnapshot(live),
+			};
+		}
+		item.prompt = prompt;
+		item.message = composePiMessage(prompt, item.materialized);
+		live.queueHeld = false;
+		this.broadcastQueue(live);
+		this.drainQueue(live);
+		return {
+			sessionId,
+			updated: true,
+			promptsInQueue: this.queueSnapshot(live),
+		};
+	}
+
+	async removePendingPrompt(
+		request: ChatSessionCommandRequest,
+	): Promise<unknown> {
+		const sessionId = request.sessionId?.trim();
+		const promptId = request.promptId?.trim();
+		if (!sessionId || !promptId) {
+			throw new Error("sessionId and promptId are required");
+		}
+		const live = this.live.get(sessionId);
+		if (!live) return { sessionId, removed: false, promptsInQueue: [] };
+		const index = this.pendingIndex(live, promptId);
+		const item = index >= 0 ? live.pending[index] : undefined;
+		if (!item) {
+			return {
+				sessionId,
+				removed: false,
+				promptsInQueue: this.queueSnapshot(live),
+			};
+		}
+		live.pending.splice(index, 1);
+		deleteMaterializedAttachments(sessionId, item.materialized);
+		this.broadcastQueue(live);
+		return {
+			sessionId,
+			removed: true,
+			prompt: queuedPromptItem(item),
+			promptsInQueue: this.queueSnapshot(live),
+		};
+	}
+
+	/** Index in the desktop queue; Pi-owned entries cannot be changed from here. */
+	private pendingIndex(
+		live: PiLiveSession,
+		promptId: string | undefined,
+	): number {
+		if (!promptId) return live.pending.length > 0 ? 0 : -1;
+		if (promptId.startsWith(PI_OWNED_QUEUE_PREFIX)) {
+			throw new Error(
+				"This message was already handed to Pi and can no longer be changed.",
+			);
+		}
+		return live.pending.findIndex((item) => item.id === promptId);
 	}
 
 	// ── Session metadata ───────────────────────────────────────────────────
@@ -1385,11 +1591,11 @@ export class PiSessionManager {
 		);
 	}
 
-	/** Pi configuration changed: restart idle processes now, busy ones after their run or compaction. */
+	/** Pi configuration changed: restart idle processes now, busy ones after their run and queue. */
 	markStale(): void {
 		this.commandsCache.clear();
 		for (const live of this.live.values()) {
-			if (live.busy || live.run) {
+			if (live.busy || live.run || live.pending.length > 0) {
 				live.stale = true;
 			} else {
 				void this.terminate(live.sessionId, "Pi configuration changed");
@@ -1513,6 +1719,11 @@ export class PiSessionManager {
 			run: null,
 			queue: { steering: [], followUp: [] },
 			queuedPromptCounter: 0,
+			pending: [],
+			pendingCounter: 0,
+			queueHeld: false,
+			handedToPi: [],
+			deferredAttachments: [],
 			toolOutputs: new Map(),
 			toolNames: new Map(),
 			pendingUi: new Set(),
@@ -1604,13 +1815,17 @@ export class PiSessionManager {
 		}
 	}
 
-	private beginRun(live: PiLiveSession): ActiveRun {
+	private beginRun(
+		live: PiLiveSession,
+		options: { fromQueue?: boolean } = {},
+	): ActiveRun {
 		let resolve!: (result: RunResult) => void;
 		const done = new Promise<RunResult>((r) => {
 			resolve = r;
 		});
 		const run: ActiveRun = {
 			directPromptPending: true,
+			fromQueue: options.fromQueue === true,
 			aborted: false,
 			lastAssistantText: "",
 			usage: {
@@ -1676,9 +1891,155 @@ export class PiSessionManager {
 			});
 		}
 		run?.resolve(result);
-		if (live.stale && this.live.get(live.sessionId) === live) {
+		if (!outcome.silent) {
+			this.afterTurn(live, outcome.finishReason, run?.fromQueue === true);
+		} else if (
+			live.stale &&
+			live.pending.length === 0 &&
+			this.live.get(live.sessionId) === live
+		) {
 			void this.terminate(live.sessionId, "Pi configuration changed");
 		}
+	}
+
+	/**
+	 * Queue rules once a turn settles, matching Cline's pending prompts:
+	 * stopping the user's own turn keeps the queue and lets it continue;
+	 * stopping a queued turn cancels the queued work itself (otherwise every
+	 * Stop would start the next prompt and the session could never halt); a
+	 * failed turn holds the queue so prompts are not spent on a failing provider.
+	 */
+	private afterTurn(
+		live: PiLiveSession,
+		reason: RunResult["finishReason"],
+		fromQueue: boolean,
+	): void {
+		for (const paths of live.deferredAttachments.splice(0))
+			deleteMaterializedAttachments(live.sessionId, paths);
+		live.handedToPi = [];
+		if (this.live.get(live.sessionId) !== live) return;
+		if (reason === "aborted" && fromQueue) this.discardQueue(live);
+		live.queueHeld = reason === "error";
+		if (live.pending.length > 0 && !live.queueHeld) {
+			queueMicrotask(() => this.drainQueue(live));
+			return;
+		}
+		if (live.stale && live.pending.length === 0) {
+			void this.terminate(live.sessionId, "Pi configuration changed");
+		}
+	}
+
+	private enqueue(
+		live: PiLiveSession,
+		input: Omit<PiQueuedPrompt, "id">,
+	): void {
+		live.pendingCounter += 1;
+		live.pending.push({
+			id: `pi_q_${live.sessionId}_${live.pendingCounter}`,
+			...input,
+		});
+		// A new prompt releases a queue held after a failed turn, as in Cline.
+		live.queueHeld = false;
+		this.broadcastQueue(live);
+		this.drainQueue(live);
+	}
+
+	/** Start the next queued prompt if Pi is idle and the queue is not held. */
+	private drainQueue(live: PiLiveSession): void {
+		if (this.live.get(live.sessionId) !== live) return;
+		if (
+			live.queueHeld ||
+			live.busy ||
+			live.run ||
+			live.compacting ||
+			live.navigating
+		)
+			return;
+		const next = live.pending.shift();
+		if (!next) {
+			if (live.stale)
+				void this.terminate(live.sessionId, "Pi configuration changed");
+			return;
+		}
+		this.broadcastQueue(live);
+		void this.dispatchQueued(live, next);
+	}
+
+	private async dispatchQueued(
+		live: PiLiveSession,
+		item: PiQueuedPrompt,
+	): Promise<void> {
+		const sessionId = live.sessionId;
+		emitChunk(
+			this.ctx,
+			sessionId,
+			"chat_queued_prompt_start",
+			JSON.stringify({
+				promptId: item.id,
+				prompt: item.prompt,
+				attachmentCount: item.attachmentCount,
+				...(item.userImages.length > 0 ? { userImages: item.userImages } : {}),
+			}),
+		);
+		const run = this.beginRun(live, { fromQueue: true });
+		let accepted: Awaited<ReturnType<PiRpcProcess["request"]>>;
+		try {
+			accepted = await live.process.request({
+				type: "prompt",
+				message: item.message,
+				...(item.images.length > 0 ? { images: item.images } : {}),
+			});
+		} catch (error) {
+			deleteMaterializedAttachments(sessionId, item.materialized);
+			this.finishRun(live, {
+				finishReason: "error",
+				errorMessage: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+		if (!accepted.success) {
+			if (/streaming/i.test(accepted.error)) {
+				// Pi started a run of its own (an extension command): put the prompt
+				// back and retry once that run settles.
+				this.finishRun(live, { finishReason: "completed", silent: true });
+				this.setBusy(live, true);
+				live.pending.unshift(item);
+				this.broadcastQueue(live);
+				return;
+			}
+			deleteMaterializedAttachments(sessionId, item.materialized);
+			this.log(sessionId, "error", accepted.error);
+			this.finishRun(live, {
+				finishReason: "error",
+				errorMessage: accepted.error,
+			});
+			return;
+		}
+		const result = await run.done;
+		if (result.finishReason === "completed") live.treeLeafId = undefined;
+		deleteMaterializedAttachments(sessionId, item.materialized);
+	}
+
+	private discardQueue(live: PiLiveSession): void {
+		if (live.pending.length === 0) return;
+		for (const item of live.pending.splice(0))
+			deleteMaterializedAttachments(live.sessionId, item.materialized);
+		this.broadcastQueue(live);
+	}
+
+	/** The process is gone: drop what the desktop still held for it. */
+	private releaseQueue(live: PiLiveSession): void {
+		this.discardQueue(live);
+		for (const paths of live.deferredAttachments.splice(0))
+			deleteMaterializedAttachments(live.sessionId, paths);
+		live.handedToPi = [];
+	}
+
+	private broadcastQueue(live: PiLiveSession): void {
+		sendEvent(this.ctx, "prompts_in_queue_state", {
+			sessionId: live.sessionId,
+			items: this.queueSnapshot(live),
+		});
 	}
 
 	private setBusy(live: PiLiveSession, busy: boolean): void {
@@ -1694,12 +2055,13 @@ export class PiSessionManager {
 	private queueSnapshot(live: PiLiveSession): PromptInQueue[] {
 		return [
 			...live.queue.steering.map((prompt, index) => ({
-				id: `steer:${index}`,
+				id: `${PI_OWNED_QUEUE_PREFIX}steer:${index}`,
 				prompt,
 				steer: true,
 			})),
+			...live.pending.map(queuedPromptItem),
 			...live.queue.followUp.map((prompt, index) => ({
-				id: `followUp:${index}`,
+				id: `${PI_OWNED_QUEUE_PREFIX}followUp:${index}`,
 				prompt,
 				steer: false,
 			})),
@@ -1745,15 +2107,36 @@ export class PiSessionManager {
 				}
 				live.queuedPromptCounter += 1;
 				this.setBusy(live, true);
+				// A queued prompt the user steered into Pi keeps its queue id and
+				// images, so the webview replaces the queue entry with one bubble.
+				const text = textOfContent(message.content);
+				const handedIndex = live.handedToPi.findIndex(
+					(item) => item.message === text,
+				);
+				const handed =
+					handedIndex >= 0
+						? live.handedToPi.splice(handedIndex, 1)[0]
+						: undefined;
 				emitChunk(
 					this.ctx,
 					sessionId,
 					"chat_queued_prompt_start",
-					JSON.stringify({
-						promptId: `pi_${sessionId}_${live.queuedPromptCounter}`,
-						prompt: textOfContent(message.content),
-						attachmentCount: 0,
-					}),
+					JSON.stringify(
+						handed
+							? {
+									promptId: handed.id,
+									prompt: handed.prompt,
+									attachmentCount: handed.attachmentCount,
+									...(handed.userImages.length > 0
+										? { userImages: handed.userImages }
+										: {}),
+								}
+							: {
+									promptId: `pi_${sessionId}_${live.queuedPromptCounter}`,
+									prompt: text,
+									attachmentCount: 0,
+								},
+					),
 				);
 				return;
 			}
@@ -1918,9 +2301,7 @@ export class PiSessionManager {
 						sessionId,
 						reason: "completed",
 					});
-					if (live.stale && this.live.get(sessionId) === live) {
-						void this.terminate(sessionId, "Pi configuration changed");
-					}
+					this.afterTurn(live, "completed", false);
 					return;
 				}
 				this.finishRun(live, {
@@ -1942,10 +2323,7 @@ export class PiSessionManager {
 						? (event.followUp as string[])
 						: [],
 				};
-				sendEvent(this.ctx, "prompts_in_queue_state", {
-					sessionId,
-					items: this.queueSnapshot(live),
-				});
+				this.broadcastQueue(live);
 				return;
 			}
 			case "compaction_start":
@@ -2191,6 +2569,14 @@ export class PiSessionManager {
 		this.live.delete(live.sessionId);
 		live.unsubscribe();
 		this.cancelPendingUi(live, "Pi process exited");
+		if (live.pending.length > 0) {
+			this.log(
+				live.sessionId,
+				"warn",
+				`Pi exited; ${live.pending.length} queued message${live.pending.length === 1 ? " was" : "s were"} not sent.`,
+			);
+		}
+		this.releaseQueue(live);
 		if (live.run) {
 			const message =
 				exit.stderr.trim().split("\n").slice(-3).join("\n").trim() ||
@@ -2209,6 +2595,7 @@ export class PiSessionManager {
 		this.live.delete(sessionId);
 		live.unsubscribe();
 		this.cancelPendingUi(live, reason);
+		this.releaseQueue(live);
 		if (live.run) {
 			live.run.aborted = true;
 			this.finishRun(live, { finishReason: "aborted" });
@@ -2222,7 +2609,13 @@ export class PiSessionManager {
 		const ttl = this.options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
 		const now = Date.now();
 		for (const live of this.live.values()) {
-			if (live.busy || live.run || live.navigating || live.pendingUi.size > 0)
+			if (
+				live.busy ||
+				live.run ||
+				live.navigating ||
+				live.pendingUi.size > 0 ||
+				live.pending.length > 0
+			)
 				continue;
 			if (now - live.lastActivityAt >= ttl) {
 				await this.terminate(live.sessionId, "Idle");
