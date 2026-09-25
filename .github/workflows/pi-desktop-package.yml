@@ -16,8 +16,11 @@ jobs:
       matrix:
         include:
           - platform: mac
-            arch: x64
+            arch: arm64
             runner: macos-15
+          - platform: mac
+            arch: x64
+            runner: macos-15-intel
           - platform: windows
             arch: x64
             runner: windows-2022
@@ -114,7 +117,14 @@ jobs:
           root=apps/examples/desktop-app/dist/desktop
           ls -lah "$root"
           case '${{ matrix.platform }}' in
-            mac) test -n "$(find "$root" -maxdepth 1 -name '*.dmg' -print -quit)" ;;
+            mac)
+              case '${{ matrix.arch }}' in
+                arm64) test "$(uname -m)" = arm64 ;;
+                x64) test "$(uname -m)" = x86_64 ;;
+              esac
+              test -n "$(find "$root" -maxdepth 1 -name '*-macos-${{ matrix.arch }}-local-unsigned.zip' -print -quit)"
+              test -n "$(find "$root" -maxdepth 1 -name '*.dmg' -print -quit)"
+              ;;
             windows) test -n "$(find "$root" -maxdepth 1 -name '*.exe' -print -quit)" ;;
             linux) test -n "$(find "$root" -maxdepth 1 -name '*.deb' -print -quit)" && test -n "$(find "$root" -maxdepth 1 -name '*.rpm' -print -quit)" ;;
           esac
