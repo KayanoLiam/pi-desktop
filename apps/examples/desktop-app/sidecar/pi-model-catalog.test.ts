@@ -8,7 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listPiModelCatalog } from "./pi-model-catalog";
+import { listPiModelCatalog, resolvePiModelPatterns } from "./pi-model-catalog";
 
 let agentDir: string;
 const fetchMock = vi.fn(() => {
@@ -86,6 +86,22 @@ afterEach(() => {
 });
 
 describe("configured Pi model catalog", () => {
+	it("uses Pi's own scope resolver for globs, names, thinking suffixes and order", async () => {
+		const models = [
+			{ provider: "alpha", id: "a", name: "Alpha A" },
+			{ provider: "alpha", id: "b", name: "Alpha B" },
+			{ provider: "alpha", id: "a:exacto", name: "Exacto" },
+			{ provider: "beta", id: "z", name: "Gamma Model" },
+		];
+		expect(
+			await resolvePiModelPatterns(
+				["gamma", "alpha/[ab]:high", "alpha/a:exacto"],
+				models,
+			),
+		).toEqual(["beta/z", "alpha/a", "alpha/b", "alpha/a:exacto"]);
+		// Unlike a naive regex, Pi's '*' does not match across a provider slash.
+		expect(await resolvePiModelPatterns(["alpha*"], models)).toEqual([]);
+	});
 	it("does not expose unauthenticated builtin providers or create credential files", async () => {
 		const result = await listPiModelCatalog();
 		expect(result.providers.map((provider) => provider.id)).not.toContain(

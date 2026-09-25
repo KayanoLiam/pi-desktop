@@ -26,6 +26,8 @@ export type ChatTurnAttachments = {
 export type PiCommandUiAction =
 	| "new"
 	| "model"
+	| "scoped-models"
+	| "thinking"
 	| "settings"
 	| "resume"
 	| "fork";
@@ -41,6 +43,14 @@ export type ExecutePiCommandResult =
 			handled: true;
 			message: string;
 			uiAction?: PiCommandUiAction;
+			/** Reflect successful Pi model/thinking changes in the desktop composer. */
+			selection?: {
+				providerId: string;
+				modelId: string;
+				thinkingLevel: string;
+			};
+			/** Last Pi message to copy, if one exists. Never a model turn. */
+			clipboardText?: string;
 			/** Reload the active session transcript, state, and sidebar metadata. Not a new LLM turn. */
 			refresh?: boolean;
 	  };

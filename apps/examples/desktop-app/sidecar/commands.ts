@@ -2354,6 +2354,42 @@ export async function handleCommand(
 			),
 		};
 	}
+	if (
+		command === "get_pi_model_scope" ||
+		command === "set_pi_model_scope" ||
+		command === "cycle_pi_model"
+	) {
+		const sessionId =
+			typeof args?.sessionId === "string" ? args.sessionId.trim() : "";
+		const environmentId = requestedEnvironmentId(args);
+		if (
+			(environmentId && environmentId !== LOCAL_ENVIRONMENT_ID) ||
+			(sessionId && !isPiSessionCommand(ctx, sessionId, args))
+		) {
+			throw new Error("Pi model scope requires a local Pi session.");
+		}
+		const input = {
+			sessionId: sessionId || undefined,
+			workspaceRoot:
+				typeof args?.workspaceRoot === "string"
+					? args.workspaceRoot
+					: undefined,
+		};
+		const manager = getPiSessionManager(ctx);
+		if (command === "cycle_pi_model") {
+			if (!sessionId)
+				throw new Error("An active Pi session is required for model cycling.");
+			return manager.cycleModel(sessionId);
+		}
+		if (command === "get_pi_model_scope") {
+			return manager.listModelScope(input);
+		}
+		return manager.setModelScope({
+			...input,
+			enabled: args?.enabled as string[],
+			save: args?.save === true,
+		});
+	}
 	if (command === "execute_pi_command") {
 		const text = typeof args?.text === "string" ? args.text : "";
 		if (!text.trim()) throw new Error("text is required");

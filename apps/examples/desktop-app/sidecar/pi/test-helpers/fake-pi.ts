@@ -22,10 +22,14 @@ export type FakePiScenario = {
 	promptError?: string;
 	state?: Record<string, unknown>;
 	models?: unknown[];
+	thinkingLevels?: string[];
+	/** Model-specific thinking level chosen by Pi after set_model. */
+	modelThinkingLevels?: Record<string, string>;
 	commands?: unknown[];
 	/** When set, `get_commands` fails so discovery fallback can be tested. */
 	commandsError?: string;
 	messages?: unknown[];
+	lastAssistantText?: string | null;
 	compactResult?: Record<string, unknown>;
 	compactError?: string;
 	compactDelayMs?: number;
@@ -201,15 +205,35 @@ async function handle(line) {
 				return;
 			}
 			model = { provider: command.provider, id: command.modelId };
+			thinkingLevel = scenario.modelThinkingLevels?.[model.provider + "/" + model.id] ?? thinkingLevel;
 			out({ id, type: "response", command: "set_model", success: true, data: { provider: model.provider, id: model.id, name: model.id } });
 			return;
 		case "set_thinking_level":
 			thinkingLevel = command.level;
 			out({ id, type: "response", command: "set_thinking_level", success: true });
 			return;
+		case "get_available_thinking_levels":
+			out({ id, type: "response", command: "get_available_thinking_levels", success: true, data: { levels: scenario.thinkingLevels ?? ["off", "minimal", "low", "medium", "high", "xhigh", "max"] } });
+			return;
+		case "get_last_assistant_text":
+			out({ id, type: "response", command: "get_last_assistant_text", success: true, data: { text: scenario.lastAssistantText ?? null } });
+			return;
 		case "get_available_models":
 			out({ id, type: "response", command: "get_available_models", success: true, data: { models: scenario.models ?? [] } });
 			return;
+		case "cycle_model": {
+			const scopeArg = args.indexOf("--models");
+			const keys = scopeArg < 0 ? null : args[scopeArg + 1].split(",");
+			const models = (scenario.models ?? []).filter((candidate) => !keys || keys.includes("*") || keys.includes(candidate.provider + "/" + candidate.id));
+			if (models.length <= 1) {
+				out({ id, type: "response", command: "cycle_model", success: true, data: null });
+				return;
+			}
+			const currentIndex = models.findIndex((candidate) => candidate.provider === model?.provider && candidate.id === model?.id);
+			model = models[(currentIndex + 1) % models.length];
+			out({ id, type: "response", command: "cycle_model", success: true, data: { model, thinkingLevel, isScoped: !!keys } });
+			return;
+		}
 		case "get_commands": {
 			const liveScenario = readScenario();
 			if (liveScenario.commandsError) {

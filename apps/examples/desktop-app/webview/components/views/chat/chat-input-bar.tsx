@@ -344,6 +344,8 @@ type ChatInputBarProps = {
 	/** The thread's current Pi selection (seeds the picker for resumed sessions). */
 	piSelection?: PiModelSelectionValue;
 	onPiSelectionChange?: (value: PiModelSelectionValue) => void;
+	/** Pi's Ctrl+P model cycling, using the session's scoped models. */
+	onCyclePiModel?: () => void;
 	status: ChatSessionStatus;
 	hasRunningAgents?: boolean;
 	provider: string;
@@ -375,6 +377,8 @@ type ChatInputBarProps = {
 	piCommandNotice?: string | null;
 	/** Increment to open the Pi provider picker (the /model control). */
 	modelPickerRequest?: number;
+	/** Increment to open the Pi thinking picker for /thinking. */
+	thinkingPickerRequest?: number;
 	onAbort: () => void;
 	promptsInQueue: PromptInQueue[];
 	attachments: Array<{ id: string; name: string; isImage: boolean }>;
@@ -405,6 +409,7 @@ function ChatInputBarImpl({
 	onAutoApproveToolsChange,
 	piSelection,
 	onPiSelectionChange,
+	onCyclePiModel,
 	status,
 	hasRunningAgents = false,
 	provider,
@@ -430,6 +435,7 @@ function ChatInputBarImpl({
 	piCommandPending = false,
 	piCommandNotice = null,
 	modelPickerRequest = 0,
+	thinkingPickerRequest = 0,
 	onAbort,
 	promptsInQueue,
 	attachments,
@@ -706,6 +712,22 @@ function ChatInputBarImpl({
 			trigger.click();
 		}
 	}, [isPiRuntime, modelPickerRequest]);
+	const seenThinkingPickerRequestRef = useRef(thinkingPickerRequest);
+	useEffect(() => {
+		if (
+			!isPiRuntime ||
+			thinkingPickerRequest === 0 ||
+			thinkingPickerRequest === seenThinkingPickerRequestRef.current
+		)
+			return;
+		seenThinkingPickerRequestRef.current = thinkingPickerRequest;
+		const trigger = document.querySelector<HTMLButtonElement>(
+			'button[aria-label="Pi thinking level"]',
+		);
+		if (trigger && trigger.getAttribute("aria-expanded") !== "true") {
+			trigger.click();
+		}
+	}, [isPiRuntime, thinkingPickerRequest]);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [transcriptionTarget, setTranscriptionTarget] =
 		useState<TranscriptionModelTarget | null>(null);
@@ -1525,6 +1547,18 @@ function ChatInputBarImpl({
 								// Enter after compositionend with isComposing already false but
 								// the legacy keyCode 229, hence the second check.
 								if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+								if (
+									isPiRuntime &&
+									e.ctrlKey &&
+									!e.metaKey &&
+									!e.altKey &&
+									e.key.toLowerCase() === "p" &&
+									onCyclePiModel
+								) {
+									e.preventDefault();
+									onCyclePiModel();
+									return;
+								}
 								// Slash command menu takes priority when open.
 								if (slashOpen && filteredSlashCommands.length > 0) {
 									if (e.key === "ArrowDown") {

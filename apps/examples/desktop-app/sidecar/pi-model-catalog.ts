@@ -2,7 +2,10 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
+import {
+	type CreateModelRuntimeOptions,
+	resolveModelScopeWithDiagnostics,
+} from "@earendil-works/pi-coding-agent";
 import {
 	isPiThinkingLevel,
 	type PiCatalogModel,
@@ -31,7 +34,9 @@ const PI_RPC_TIMEOUT_MS = 15_000;
  * tools, no project-local files. Returns null when Pi is not installed or does
  * not answer in time; callers must then avoid guessing capabilities.
  */
-export async function listPiRpcModels(): Promise<PiRpcModel[] | null> {
+export async function listPiRpcModels(
+	options: { cwd?: string; binary?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<PiRpcModel[] | null> {
 	let child: PiRpcProcess;
 	try {
 		child = new PiRpcProcess({
@@ -46,8 +51,9 @@ export async function listPiRpcModels(): Promise<PiRpcModel[] | null> {
 				"--no-context-files",
 				"--no-approve",
 			],
-			cwd: tmpdir(),
-			env: { ...process.env, PI_OFFLINE: "1" },
+			cwd: options.cwd ?? tmpdir(),
+			binary: options.binary,
+			env: { ...(options.env ?? process.env), PI_OFFLINE: "1" },
 		});
 	} catch {
 		return null;
@@ -75,30 +81,22 @@ export async function listPiRpcModels(): Promise<PiRpcModel[] | null> {
 	}
 }
 
-/** Pi's `enabledModels` glob semantics: match "provider/id" or the bare id, case-insensitively. */
-function matchesModelPattern(pattern: string, model: PiRpcModel): boolean {
-	const glob = pattern.replace(/:(off|minimal|low|medium|high|xhigh|max)$/, "");
-	if (/[*?[\]{}]/.test(glob)) {
-		const regex = new RegExp(
-			`^${glob
-				.split("")
-				.map((char) =>
-					char === "*"
-						? ".*"
-						: char === "?"
-							? "."
-							: char.replace(/[.+^${}()|[\]\\]/g, "\\$&"),
-				)
-				.join("")}$`,
-			"i",
-		);
-		return regex.test(`${model.provider}/${model.id}`) || regex.test(model.id);
-	}
-	const lower = glob.toLowerCase();
-	return (
-		`${model.provider}/${model.id}`.toLowerCase() === lower ||
-		model.id.toLowerCase() === lower
+/** Resolve Pi's real enabledModels rules (glob classes, fuzzy IDs, thinking suffixes and scope order). */
+export async function resolvePiModelPatterns(
+	patterns: string[],
+	models: Array<{ provider: string; id: string; name?: string }>,
+): Promise<string[]> {
+	// The resolver only calls getAvailable on this read-only snapshot. Using Pi's
+	// public resolver avoids a second, subtly different glob parser in Desktop.
+	const snapshot = {
+		getAvailable: async () =>
+			models.map((model) => ({ ...model, name: model.name ?? model.id })),
+	} as unknown as Parameters<typeof resolveModelScopeWithDiagnostics>[1];
+	const { scopedModels } = await resolveModelScopeWithDiagnostics(
+		patterns,
+		snapshot,
 	);
+	return scopedModels.map(({ model }) => `${model.provider}/${model.id}`);
 }
 
 type CredentialStore = NonNullable<CreateModelRuntimeOptions["credentials"]>;
@@ -222,6 +220,9 @@ export async function listPiModelCatalog(): Promise<PiModelCatalog> {
 			});
 			const rpcModels =
 				extensionPatterns.length > 0 ? await listPiRpcModels() : null;
+			const resolvedExtensionIds = rpcModels
+				? new Set(await resolvePiModelPatterns(extensionPatterns, rpcModels))
+				: null;
 			const addExtensionModel = (
 				providerId: string,
 				model: PiCatalogModel,
@@ -243,7 +244,8 @@ export async function listPiModelCatalog(): Promise<PiModelCatalog> {
 					for (const model of rpcModels) {
 						if (model.provider !== providerId) continue;
 						if (runtime.getProvider(model.provider)) continue;
-						if (!matchesModelPattern(pattern, model)) continue;
+						if (!resolvedExtensionIds?.has(`${model.provider}/${model.id}`))
+							continue;
 						addExtensionModel(providerId, {
 							id: model.id,
 							name: model.name || model.id,

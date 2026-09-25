@@ -30,6 +30,8 @@ describe("pi slash command helpers", () => {
 			"name",
 			"new",
 			"model",
+			"scoped-models",
+			"thinking",
 			"settings",
 			"resume",
 		]);

@@ -3,7 +3,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { isPiThinkingLevel } from "../../webview/lib/pi-model-selection";
 import {
 	deleteMaterializedAttachments,
 	materializeUserFiles,
@@ -15,6 +16,7 @@ import {
 	sendEvent,
 	sendEventToClient,
 } from "../context";
+import { listPiRpcModels, resolvePiModelPatterns } from "../pi-model-catalog";
 import {
 	type ChatSessionCommandRequest,
 	type ExecutePiCommandResult,
@@ -160,6 +162,13 @@ export class PiSessionManager {
 	readonly metadata: PiSessionMetadataStore;
 	private readonly ctx: SidecarContext;
 	private readonly live = new Map<string, PiLiveSession>();
+	/** Session-only /scoped-models selections, independent of Pi's saved settings. */
+	private readonly modelScopes = new Map<string, string[]>();
+	/** Pi does not create a session file until the first turn is written. */
+	private readonly unpersistedSessionConfigs = new Map<
+		string,
+		JsonRecord & { cwd: string }
+	>();
 	private readonly options: PiSessionManagerOptions;
 	private readonly commandsCache = new Map<
 		string,
@@ -188,10 +197,12 @@ export class PiSessionManager {
 
 	// ── Queries ────────────────────────────────────────────────────────────
 
-	/** True for live processes and for sessions Pi has on disk. */
+	/** True for live, persisted, or scoped sessions awaiting their first turn. */
 	owns(sessionId: string): boolean {
 		return (
-			this.live.has(sessionId) || this.files.findById(sessionId) !== undefined
+			this.live.has(sessionId) ||
+			this.unpersistedSessionConfigs.has(sessionId) ||
+			this.files.findById(sessionId) !== undefined
 		);
 	}
 
@@ -275,7 +286,11 @@ export class PiSessionManager {
 		const summary = this.files.findById(sessionId);
 		const live = summary
 			? await this.spawn(sessionId, config, { resume: summary })
-			: await this.spawn(sessionId, config, { create: true });
+			: await this.spawn(
+					sessionId,
+					{ ...this.unpersistedSessionConfigs.get(sessionId), ...config },
+					{ create: true },
+				);
 		return this.startResult(live);
 	}
 
@@ -284,16 +299,25 @@ export class PiSessionManager {
 		if (!sessionId) throw new Error("sessionId is required");
 		const live = this.live.get(sessionId);
 		const summary = this.files.findById(sessionId);
-		if (!live && !summary) throw new Error(`Pi session ${sessionId} not found`);
+		const pending = this.unpersistedSessionConfigs.get(sessionId);
+		if (!live && !summary && !pending)
+			throw new Error(`Pi session ${sessionId} not found`);
 		if (live && request.config)
 			live.config = { ...live.config, ...request.config };
-		const cwd = live?.cwd ?? summary?.cwd ?? "";
+		const cwd = live?.cwd ?? summary?.cwd ?? pending?.cwd ?? "";
 		return {
 			sessionId,
 			environmentId: LOCAL_ENVIRONMENT_ID,
-			status: this.status(sessionId) ?? "completed",
-			provider: live?.provider ?? summary?.provider ?? "",
-			model: live?.model ?? summary?.model ?? "",
+			status:
+				this.status(sessionId) ?? (pending && !summary ? "idle" : "completed"),
+			provider:
+				live?.provider ??
+				summary?.provider ??
+				(typeof pending?.provider === "string" ? pending.provider : ""),
+			model:
+				live?.model ??
+				summary?.model ??
+				(typeof pending?.model === "string" ? pending.model : ""),
 			cwd,
 			workspaceRoot: cwd,
 			prompt: summary?.firstMessage,
@@ -322,10 +346,19 @@ export class PiSessionManager {
 		let live = this.live.get(sessionId);
 		if (!live) {
 			const summary = this.files.findById(sessionId);
-			if (!summary) throw new Error(`Pi session ${sessionId} not found`);
-			live = await this.spawn(sessionId, request.config ?? {}, {
-				resume: summary,
-			});
+			if (summary) {
+				live = await this.spawn(sessionId, request.config ?? {}, {
+					resume: summary,
+				});
+			} else {
+				const pending = this.unpersistedSessionConfigs.get(sessionId);
+				if (!pending) throw new Error(`Pi session ${sessionId} not found`);
+				live = await this.spawn(
+					sessionId,
+					{ ...pending, ...request.config },
+					{ create: true },
+				);
+			}
 		} else if (request.config) {
 			live.config = { ...live.config, ...request.config };
 			if (!live.busy) await this.applyModelSelection(live);
@@ -503,6 +536,8 @@ export class PiSessionManager {
 	async deleteSession(sessionId: string): Promise<boolean> {
 		const summary = this.files.findById(sessionId);
 		await this.terminate(sessionId, "Session deleted");
+		this.modelScopes.delete(sessionId);
+		this.unpersistedSessionConfigs.delete(sessionId);
 		this.metadata.delete(sessionId);
 		if (!summary) return false;
 		return this.files.delete(summary.path);
@@ -609,6 +644,12 @@ export class PiSessionManager {
 		if (!text) throw new Error("text is required");
 		const name = piBuiltinCommandName(text);
 		if (!name) return { handled: false };
+		if (name === "model" && piCommandRemainder(text, name)) {
+			return this.executeModel(input.sessionId, input.workspaceRoot, text);
+		}
+		if (name === "thinking" && piCommandRemainder(text, name)) {
+			return this.executeThinking(input.sessionId, text);
+		}
 		const ui = desktopUiCommand(name, text);
 		if (ui) {
 			if (name === "fork" && !input.sessionId?.trim()) {
@@ -627,12 +668,152 @@ export class PiSessionManager {
 				return this.executeSessionInfo(input.sessionId);
 			case "export":
 				return this.executeExport(input.sessionId, input.workspaceRoot, text);
+			case "copy":
+				return this.executeCopy(input.sessionId);
 			default:
 				return {
 					handled: true,
 					message: `/${name} is a Pi builtin, but Desktop does not run it. Nothing was changed.`,
 				};
 		}
+	}
+
+	private async executeCopy(
+		sessionId: string | undefined,
+	): Promise<ExecutePiCommandResult> {
+		const id = this.requireSessionId(sessionId, "copy");
+		const live = await this.ensureLiveSession(id);
+		this.assertIdle(live, "copy");
+		const response = await live.process.request<{ text?: string | null }>({
+			type: "get_last_assistant_text",
+		});
+		if (!response.success)
+			throw new Error(response.error || "Could not read the last Pi response");
+		if (!response.data?.text)
+			return { handled: true, message: "No Pi assistant message to copy." };
+		return {
+			handled: true,
+			message: "Copying the last Pi response to the clipboard.",
+			clipboardText: response.data.text,
+		};
+	}
+
+	private async executeModel(
+		sessionId: string | undefined,
+		workspaceRoot: string | undefined,
+		text: string,
+	): Promise<ExecutePiCommandResult> {
+		const argument = piCommandRemainder(text, "model");
+		if (!argument || /\s/.test(argument)) {
+			throw new Error(
+				"Use /model provider/model, or /model to open the picker.",
+			);
+		}
+		const id = sessionId?.trim() ?? "";
+		const live = id ? await this.ensureLiveSession(id) : undefined;
+		if (live) this.assertIdle(live, "model");
+		const scope = await this.listModelScope({ sessionId: id, workspaceRoot });
+		const exact = scope.models.filter(
+			(model) =>
+				model.id.toLowerCase() === argument.toLowerCase() ||
+				`${model.provider}/${model.id}`.toLowerCase() ===
+					argument.toLowerCase(),
+		);
+		if (exact.length !== 1) {
+			return {
+				handled: true,
+				uiAction: "model",
+				message: `Could not uniquely match ${argument}. Choose a model in the picker.`,
+			};
+		}
+		const { provider, id: modelId } = exact[0];
+		if (live) {
+			if (this.live.get(id) !== live)
+				throw new Error("Pi session changed during /model.");
+			this.assertIdle(live, "model");
+			const response = await live.process.request({
+				type: "set_model",
+				provider,
+				modelId,
+			});
+			if (!response.success)
+				throw new Error(response.error || "Pi could not select the model");
+			const state = await live.process.request<{ thinkingLevel?: string }>({
+				type: "get_state",
+			});
+			if (!state.success)
+				throw new Error(
+					state.error ||
+						"Pi model changed, but could not read its thinking level",
+				);
+			live.provider = provider;
+			live.model = modelId;
+			live.thinkingLevel = state.data?.thinkingLevel;
+			live.config = {
+				...live.config,
+				provider,
+				model: modelId,
+				piThinkingLevel: live.thinkingLevel,
+			};
+		}
+		return {
+			handled: true,
+			message: live
+				? `Pi model: ${argument}.`
+				: `Model selected for the next Pi session: ${argument}.`,
+			selection: {
+				providerId: provider,
+				modelId,
+				thinkingLevel: live?.thinkingLevel ?? "",
+			},
+		};
+	}
+
+	private async executeThinking(
+		sessionId: string | undefined,
+		text: string,
+	): Promise<ExecutePiCommandResult> {
+		const level = piCommandRemainder(text, "thinking");
+		if (!isPiThinkingLevel(level)) {
+			throw new Error("Use /thinking off|minimal|low|medium|high|xhigh|max.");
+		}
+		const id = sessionId?.trim() ?? "";
+		if (!id) {
+			return {
+				handled: true,
+				message: `Thinking level ${level} selected for the next Pi session.`,
+				selection: { providerId: "", modelId: "", thinkingLevel: level },
+			};
+		}
+		const live = await this.ensureLiveSession(id);
+		this.assertIdle(live, "thinking");
+		const available = await live.process.request<{ levels?: string[] }>({
+			type: "get_available_thinking_levels",
+		});
+		if (!available.success)
+			throw new Error(available.error || "Could not read Pi thinking levels");
+		if (!available.data?.levels?.includes(level)) {
+			throw new Error(
+				`Pi's current model does not support thinking level ${level}.`,
+			);
+		}
+		const response = await live.process.request({
+			type: "set_thinking_level",
+			level,
+		});
+		if (!response.success)
+			throw new Error(response.error || "Pi could not set thinking level");
+		live.thinkingLevel = level;
+		live.config = { ...live.config, piThinkingLevel: level };
+		return {
+			handled: true,
+			message: `Pi thinking level: ${level}.`,
+			selection: {
+				providerId: live.provider ?? "",
+				modelId: live.model ?? "",
+				thinkingLevel: level,
+			},
+		};
 	}
 
 	private requireSessionId(
@@ -645,12 +826,183 @@ export class PiSessionManager {
 		return id;
 	}
 
+	/** Available Pi models and the effective cycling selection. Null means all. */
+	async listModelScope(input: {
+		sessionId?: string;
+		workspaceRoot?: string;
+	}): Promise<{
+		models: Array<{ provider: string; id: string; name: string }>;
+		enabled: string[] | null;
+		hasSession: boolean;
+	}> {
+		const id = input.sessionId?.trim() ?? "";
+		if (id && !this.owns(id)) throw new Error(`Pi session ${id} not found`);
+		const live = id ? this.live.get(id) : undefined;
+		const cwd =
+			live?.cwd ??
+			(id ? this.files.findById(id)?.cwd : undefined) ??
+			(id ? this.unpersistedSessionConfigs.get(id)?.cwd : undefined) ??
+			input.workspaceRoot?.trim() ??
+			this.ctx.localWorkspaceRoot;
+		const response = live
+			? await live.process.request<{ models?: unknown }>({
+					type: "get_available_models",
+				})
+			: undefined;
+		if (response && !response.success) {
+			throw new Error(response.error || "Could not list Pi models");
+		}
+		const raw = response
+			? response.data?.models
+			: await listPiRpcModels({
+					cwd,
+					binary: this.options.binary,
+					env: this.options.env?.(),
+				});
+		if (!Array.isArray(raw))
+			throw new Error("Could not list available Pi models");
+		const models = raw
+			.filter(
+				(model): model is { provider: string; id: string; name?: string } =>
+					!!model &&
+					typeof model === "object" &&
+					typeof model.provider === "string" &&
+					typeof model.id === "string",
+			)
+			.map((model) => ({
+				provider: model.provider,
+				id: model.id,
+				name: model.name || model.id,
+			}));
+		const settings = SettingsManager.create(
+			cwd,
+			this.options.agentDir?.() ?? getAgentDir(),
+		);
+		const patterns = this.modelScopes.get(id) ?? settings.getEnabledModels();
+		const enabled = patterns?.length
+			? await resolvePiModelPatterns(patterns, models)
+			: null;
+		return { models, enabled, hasSession: Boolean(id) };
+	}
+
+	/** Apply to this session; optionally save the same selection to Pi settings. */
+	async setModelScope(input: {
+		sessionId?: string;
+		workspaceRoot?: string;
+		enabled: string[];
+		save: boolean;
+	}): Promise<{ enabled: string[] | null }> {
+		const id = input.sessionId?.trim() ?? "";
+		if (!id && !input.save) {
+			throw new Error(
+				"Start a Pi session or save the selection for new sessions.",
+			);
+		}
+		const live = id ? this.live.get(id) : undefined;
+		if (live) this.assertIdle(live, "scoped-models");
+		const snapshot = await this.listModelScope(input);
+		if (live) {
+			if (this.live.get(id) !== live) {
+				throw new Error("The Pi session changed. Reopen /scoped-models.");
+			}
+			this.assertIdle(live, "scoped-models");
+		}
+		const available = new Set(
+			snapshot.models.map((model) => `${model.provider}/${model.id}`),
+		);
+		if (
+			!Array.isArray(input.enabled) ||
+			input.enabled.some(
+				(key) => typeof key !== "string" || !available.has(key),
+			)
+		) {
+			throw new Error(
+				"The model selection has changed. Reopen /scoped-models.",
+			);
+		}
+		const selected = [...new Set(input.enabled)];
+		// As in Pi's selector, no selection or every model means unrestricted cycling.
+		const scope =
+			selected.length === 0 || selected.length === available.size
+				? []
+				: selected;
+		if (input.save) {
+			const cwd =
+				live?.cwd ??
+				(id ? this.files.findById(id)?.cwd : undefined) ??
+				(id ? this.unpersistedSessionConfigs.get(id)?.cwd : undefined) ??
+				input.workspaceRoot?.trim() ??
+				this.ctx.localWorkspaceRoot;
+			const settings = SettingsManager.create(
+				cwd,
+				this.options.agentDir?.() ?? getAgentDir(),
+			);
+			settings.setEnabledModels(scope.length ? scope : undefined);
+			await settings.flush();
+			const errors = settings.drainErrors();
+			if (errors.length)
+				throw new Error(
+					`Could not save Pi models: ${errors[0]?.error.message}`,
+				);
+		}
+		if (id) {
+			// RPC cannot change scoped models in a running Pi process. Resume its
+			// session with --models so cycling changes without losing the transcript.
+			// Before the first turn there is no file to resume; retain the config
+			// so the same session id can instead start a fresh scoped process.
+			if (live && (!live.sessionFile || !existsSync(live.sessionFile))) {
+				this.unpersistedSessionConfigs.set(id, {
+					...live.config,
+					cwd: live.cwd,
+				});
+			}
+			this.modelScopes.set(id, scope.length ? scope : ["*"]);
+			if (live) await this.terminate(id, "Pi model cycling updated");
+		}
+		return { enabled: scope.length ? scope : null };
+	}
+
+	/** Ctrl+P uses Pi's real scoped cycle, never a desktop-only approximation. */
+	async cycleModel(sessionId: string): Promise<{
+		providerId: string;
+		modelId: string;
+		thinkingLevel: string;
+	} | null> {
+		const id = this.requireSessionId(sessionId, "cycle-model");
+		const live = await this.ensureLiveSession(id);
+		this.assertIdle(live, "cycle-model");
+		const response = await live.process.request<{
+			model?: { provider?: string; id?: string };
+			thinkingLevel?: string;
+		}>({ type: "cycle_model" });
+		if (!response.success)
+			throw new Error(response.error || "Could not cycle Pi model");
+		const model = response.data?.model;
+		if (!model?.provider || !model.id) return null;
+		live.provider = model.provider;
+		live.model = model.id;
+		live.thinkingLevel = response.data?.thinkingLevel ?? live.thinkingLevel;
+		live.config = {
+			...live.config,
+			provider: live.provider,
+			model: live.model,
+			piThinkingLevel: live.thinkingLevel,
+		};
+		return {
+			providerId: live.provider,
+			modelId: live.model,
+			thinkingLevel: live.thinkingLevel ?? "",
+		};
+	}
+
 	private async ensureLiveSession(sessionId: string): Promise<PiLiveSession> {
 		const live = this.live.get(sessionId);
 		if (live) return live;
 		const summary = this.files.findById(sessionId);
-		if (!summary) throw new Error(`Pi session ${sessionId} not found`);
-		return this.spawn(sessionId, {}, { resume: summary });
+		if (summary) return this.spawn(sessionId, {}, { resume: summary });
+		const config = this.unpersistedSessionConfigs.get(sessionId);
+		if (config) return this.spawn(sessionId, config, { create: true });
+		throw new Error(`Pi session ${sessionId} not found`);
 	}
 
 	private assertIdle(live: PiLiveSession, command: string): void {
@@ -957,6 +1309,8 @@ export class PiSessionManager {
 		if (!resume && provider && model)
 			args.push("--model", `${provider}/${model}`);
 		if (!resume && thinking) args.push("--thinking", thinking);
+		const modelScope = this.modelScopes.get(sessionId);
+		if (modelScope?.length) args.push("--models", modelScope.join(","));
 		const gate = (
 			this.options.gateExtensionPath ?? ensurePiDesktopGateExtension
 		)();
@@ -1636,8 +1990,25 @@ export class PiSessionManager {
 		live.pendingUi.clear();
 	}
 
+	/** Keep model and thinking changes made before Pi writes its first session file. */
+	private rememberUnpersistedSession(live: PiLiveSession): void {
+		if (!this.unpersistedSessionConfigs.has(live.sessionId)) return;
+		if (live.sessionFile && existsSync(live.sessionFile)) {
+			this.unpersistedSessionConfigs.delete(live.sessionId);
+			return;
+		}
+		this.unpersistedSessionConfigs.set(live.sessionId, {
+			...live.config,
+			...(live.provider ? { provider: live.provider } : {}),
+			...(live.model ? { model: live.model } : {}),
+			...(live.thinkingLevel ? { piThinkingLevel: live.thinkingLevel } : {}),
+			cwd: live.cwd,
+		});
+	}
+
 	private handleExit(live: PiLiveSession, exit: PiRpcExit): void {
 		if (this.live.get(live.sessionId) !== live) return;
+		this.rememberUnpersistedSession(live);
 		this.live.delete(live.sessionId);
 		live.unsubscribe();
 		this.cancelPendingUi(live, "Pi process exited");
@@ -1655,6 +2026,7 @@ export class PiSessionManager {
 	private async terminate(sessionId: string, reason: string): Promise<void> {
 		const live = this.live.get(sessionId);
 		if (!live) return;
+		this.rememberUnpersistedSession(live);
 		this.live.delete(sessionId);
 		live.unsubscribe();
 		this.cancelPendingUi(live, reason);

@@ -13,6 +13,8 @@ export const PI_SESSION_REFRESH_EVENT = "cline:pi-session-refresh";
 export const PI_COMMAND_UI_ACTIONS = [
 	"new",
 	"model",
+	"scoped-models",
+	"thinking",
 	"settings",
 	"resume",
 	"fork",
@@ -77,6 +79,8 @@ export const PI_SLASH_COMMAND_FALLBACK: PiSlashCommandRow[] = [
 	{ name: "name", description: "Set the session display name" },
 	{ name: "new", description: "Start a new session" },
 	{ name: "model", description: "Open the model picker" },
+	{ name: "scoped-models", description: "Configure Pi model cycling" },
+	{ name: "thinking", description: "Set a Pi thinking level" },
 	{ name: "settings", description: "Open desktop settings" },
 	{ name: "resume", description: "Search and open a previous session" },
 ];
@@ -100,12 +104,20 @@ export type ExecutePiCommandResponse =
 			handled: true;
 			message: string;
 			uiAction?: PiCommandUiAction;
+			selection?: {
+				providerId: string;
+				modelId: string;
+				thinkingLevel: string;
+			};
+			clipboardText?: string;
 			refresh: boolean;
 	  };
 
 export type PiCommandHandled = {
 	message: string;
 	uiAction?: PiCommandUiAction;
+	selection?: { providerId: string; modelId: string; thinkingLevel: string };
+	clipboardText?: string;
 	refresh: boolean;
 	preserveAttachments: true;
 	sessionTitle?: string;
@@ -174,10 +186,26 @@ export function parseExecutePiCommandResponse(
 		typeof record.uiAction === "string" && UI_ACTIONS.has(record.uiAction)
 			? (record.uiAction as PiCommandUiAction)
 			: undefined;
+	const rawSelection = record.selection as Record<string, unknown> | undefined;
+	const selection =
+		rawSelection &&
+		typeof rawSelection.providerId === "string" &&
+		typeof rawSelection.modelId === "string" &&
+		typeof rawSelection.thinkingLevel === "string"
+			? {
+					providerId: rawSelection.providerId,
+					modelId: rawSelection.modelId,
+					thinkingLevel: rawSelection.thinkingLevel,
+				}
+			: undefined;
 	return {
 		handled: true,
 		message,
 		...(uiAction ? { uiAction } : {}),
+		...(selection ? { selection } : {}),
+		...(typeof record.clipboardText === "string"
+			? { clipboardText: record.clipboardText }
+			: {}),
 		refresh: record.refresh === true,
 	};
 }
@@ -253,6 +281,8 @@ export function routePiCommandUiAction(
 	handlers: {
 		onNew?: () => void;
 		onModel?: () => void;
+		onScopedModels?: () => void;
+		onThinking?: () => void;
 		onSettings?: () => void;
 		onResume?: () => void;
 	},
@@ -264,9 +294,13 @@ export function routePiCommandUiAction(
 			? handlers.onNew
 			: action === "model"
 				? handlers.onModel
-				: action === "settings"
-					? handlers.onSettings
-					: handlers.onResume;
+				: action === "scoped-models"
+					? handlers.onScopedModels
+					: action === "thinking"
+						? handlers.onThinking
+						: action === "settings"
+							? handlers.onSettings
+							: handlers.onResume;
 	if (!handler) return "guidance";
 	handler();
 	return "routed";

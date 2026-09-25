@@ -76,6 +76,20 @@ export function piModelKey(providerId: string, modelId: string): string {
 	return `${providerId}/${modelId}`;
 }
 
+/** Before a Pi session starts, cycle the saved scope in Pi's selection order. */
+export function orderedPiCyclingModels<
+	T extends { provider: string; id: string },
+>(models: readonly T[], enabled: string[] | null): T[] {
+	if (!enabled?.length) return [...models];
+	const byId = new Map(
+		models.map((model) => [piModelKey(model.provider, model.id), model]),
+	);
+	return enabled.flatMap((key) => {
+		const model = byId.get(key);
+		return model ? [model] : [];
+	});
+}
+
 export function emptyPiModelSelection(): PiModelSelection {
 	return {
 		version: 1,

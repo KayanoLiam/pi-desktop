@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	clampPiThinkingLevel,
 	emptyPiModelSelection,
+	orderedPiCyclingModels,
 	type PiCatalogProvider,
 	type PiModelSelection,
 	parsePiModelSelection,
@@ -9,6 +10,20 @@ import {
 	selectedPiThinkingLevel,
 	selectPiProvider,
 } from "./pi-model-selection";
+
+it("cycles a pre-session Pi selection in saved scope order, or all if unrestricted", () => {
+	const models = [
+		{ provider: "alpha", id: "a" },
+		{ provider: "alpha", id: "b" },
+		{ provider: "beta", id: "c" },
+	];
+	expect(orderedPiCyclingModels(models, ["beta/c", "alpha/a"])).toEqual([
+		models[2],
+		models[0],
+	]);
+	expect(orderedPiCyclingModels(models, null)).toEqual(models);
+	expect(orderedPiCyclingModels(models, [])).toEqual(models);
+});
 
 const providers: PiCatalogProvider[] = [
 	{

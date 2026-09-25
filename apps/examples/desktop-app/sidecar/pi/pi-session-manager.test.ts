@@ -1,6 +1,7 @@
 import {
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
@@ -55,6 +56,7 @@ function createManager(
 	fake = createFakePi(join(dir, "fake"), scenario);
 	manager = new PiSessionManager(ctx, {
 		files: new PiSessionFiles(() => agentDir),
+		agentDir: () => agentDir,
 		binary: fake.bin,
 		reapIntervalMs: 0,
 		compactTimeoutMs: options.compactTimeoutMs,
@@ -687,6 +689,396 @@ describe("PiSessionManager", () => {
 		);
 	});
 
+	it("configures scoped models for a session and saves them for new sessions", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a", name: "Alpha A" },
+				{ provider: "alpha", id: "b", name: "Alpha B" },
+				{ provider: "beta", id: "c", name: "Beta C" },
+			],
+		});
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({
+				enabledModels: ["alpha/*"],
+				defaultModel: "preserved",
+			}),
+		);
+		await startPi(manager, "s-scope");
+		const sessionsDir = join(agentDir, "sessions", "--work--");
+		mkdirSync(sessionsDir, { recursive: true });
+		writeFileSync(
+			join(sessionsDir, "s-scope.jsonl"),
+			`${JSON.stringify({ type: "session", version: 3, id: "s-scope", cwd: dir, timestamp: new Date().toISOString() })}\n`,
+		);
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-scope",
+				text: "/scoped-models",
+			}),
+		).toMatchObject({
+			uiAction: "scoped-models",
+		});
+		const scope = await manager.listModelScope({ sessionId: "s-scope" });
+		expect(scope).toMatchObject({
+			enabled: ["alpha/a", "alpha/b"],
+			hasSession: true,
+		});
+		await expect(
+			manager.setModelScope({
+				sessionId: "s-scope",
+				enabled: ["alpha/unknown"],
+				save: false,
+			}),
+		).rejects.toThrow(/selection has changed/);
+		await manager.setModelScope({
+			sessionId: "s-scope",
+			enabled: ["beta/c"],
+			save: false,
+		});
+		expect(manager.isLive("s-scope")).toBe(false);
+		expect(
+			JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"))
+				.enabledModels,
+		).toEqual(["alpha/*"]);
+		await startPi(manager, "s-scope");
+		expect(
+			fake.received().findLast((record) => Array.isArray(record.argv))?.argv,
+		).toContain("beta/c");
+		expect(
+			(await manager.listModelScope({ sessionId: "s-scope" })).enabled,
+		).toEqual(["beta/c"]);
+		await manager.setModelScope({
+			sessionId: "s-scope",
+			enabled: ["alpha/a"],
+			save: true,
+		});
+		expect(
+			JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")),
+		).toMatchObject({
+			enabledModels: ["alpha/a"],
+			defaultModel: "preserved",
+		});
+		await manager.setModelScope({
+			sessionId: "s-scope",
+			enabled: [],
+			save: true,
+		});
+		expect(
+			JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"))
+				.enabledModels,
+		).toBeUndefined();
+	});
+
+	it("restarts a scoped Pi session before its first turn has written a file", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+				{ provider: "alpha", id: "c" },
+			],
+		});
+		await startPi(manager, "s-new-scope");
+		expect(manager.files.findById("s-new-scope")).toBeUndefined();
+		await manager.setModelScope({
+			sessionId: "s-new-scope",
+			enabled: ["alpha/a", "alpha/b"],
+			save: false,
+		});
+		expect(manager.isLive("s-new-scope")).toBe(false);
+		expect(
+			await manager.listModelScope({ sessionId: "s-new-scope" }),
+		).toMatchObject({
+			hasSession: true,
+			enabled: ["alpha/a", "alpha/b"],
+		});
+		const cycled = await manager.cycleModel("s-new-scope");
+		expect(cycled?.providerId).toBe("alpha");
+		expect(manager.isLive("s-new-scope")).toBe(true);
+		expect(
+			fake.received().findLast((record) => Array.isArray(record.argv))?.argv,
+		).toEqual(expect.arrayContaining(["--models", "alpha/a,alpha/b"]));
+		await manager.stop({ action: "stop", sessionId: "s-new-scope" });
+		expect(manager.files.findById("s-new-scope")).toBeUndefined();
+		const next = await manager.cycleModel("s-new-scope");
+		expect(next?.modelId).toBe("b");
+		expect(
+			fake.received().findLast((record) => Array.isArray(record.argv))?.argv,
+		).toEqual(
+			expect.arrayContaining([
+				"--model",
+				"alpha/a",
+				"--models",
+				"alpha/a,alpha/b",
+			]),
+		);
+	});
+
+	it("sends the first prompt after scoping an empty Pi session", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+			],
+		});
+		await startPi(manager, "s-empty-send");
+		await manager.setModelScope({
+			sessionId: "s-empty-send",
+			enabled: ["alpha/a"],
+			save: false,
+		});
+		expect(
+			await manager.attach({ action: "attach", sessionId: "s-empty-send" }),
+		).toMatchObject({
+			status: "idle",
+			provider: "p",
+			model: "m",
+			cwd: dir,
+		});
+		await manager.send({
+			action: "send",
+			sessionId: "s-empty-send",
+			prompt: "hello pi",
+		});
+		expect(rpcTypes()).toContain("prompt");
+		expect(
+			fake.received().findLast((record) => Array.isArray(record.argv))?.argv,
+		).toEqual(
+			expect.arrayContaining(["--model", "p/m", "--models", "alpha/a"]),
+		);
+	});
+
+	it("retains the configuration when restarting an empty scoped Pi session", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+			],
+		});
+		await startPi(manager, "s-empty-start");
+		await manager.setModelScope({
+			sessionId: "s-empty-start",
+			enabled: ["alpha/b"],
+			save: false,
+		});
+		await manager.start({
+			action: "start",
+			config: { sessionId: "s-empty-start" },
+		});
+		expect(manager.isLive("s-empty-start")).toBe(true);
+		expect(
+			fake.received().findLast((record) => Array.isArray(record.argv))?.argv,
+		).toEqual(
+			expect.arrayContaining(["--model", "p/m", "--models", "alpha/b"]),
+		);
+	});
+
+	it("forgets session-only scoped models when the session is deleted", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+			],
+		});
+		await startPi(manager, "s-delete-scope");
+		await manager.setModelScope({
+			sessionId: "s-delete-scope",
+			enabled: ["alpha/a"],
+			save: false,
+		});
+		await manager.deleteSession("s-delete-scope");
+		expect(manager.owns("s-delete-scope")).toBe(false);
+		await startPi(manager, "s-delete-scope");
+		const lastArgv = fake.received().findLast((entry) => entry.argv)?.argv;
+		expect(lastArgv).not.toContain("--models");
+	});
+
+	it("shows Pi's resolved configured model scope in cycling order", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+				{ provider: "beta", id: "c" },
+			],
+		});
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ enabledModels: ["beta/c", "alpha/[ab]:high"] }),
+		);
+		await startPi(manager, "s-pattern-scope");
+		expect(
+			(await manager.listModelScope({ sessionId: "s-pattern-scope" })).enabled,
+		).toEqual(["beta/c", "alpha/a", "alpha/b"]);
+	});
+
+	it("does not restart a busy Pi session to change its scoped models", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+			],
+			promptEvents: [{ __waitForUi__: true }],
+		});
+		await startPi(manager, "s-scope-busy");
+		const pending = manager.handle({
+			action: "send",
+			sessionId: "s-scope-busy",
+			prompt: "hello",
+		});
+		await waitFor(() => manager.status("s-scope-busy") === "running");
+		await expect(
+			manager.setModelScope({
+				sessionId: "s-scope-busy",
+				enabled: ["alpha/a"],
+				save: false,
+			}),
+		).rejects.toThrow(/busy/i);
+		expect(manager.isLive("s-scope-busy")).toBe(true);
+		await manager.handle({ action: "abort", sessionId: "s-scope-busy" });
+		await pending;
+	});
+
+	it("cycles Pi models using the RPC command and keeps the session selection", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+			],
+		});
+		await startPi(manager, "s-cycle");
+		expect(await manager.cycleModel("s-cycle")).toMatchObject({
+			providerId: "alpha",
+			modelId: "a",
+		});
+		expect(await manager.cycleModel("s-cycle")).toMatchObject({
+			providerId: "alpha",
+			modelId: "b",
+		});
+		expect(rpcTypes().filter((type) => type === "cycle_model")).toHaveLength(2);
+		expect(manager.isLive("s-cycle")).toBe(true);
+	});
+
+	it("offers the Pi scope selector before a session exists and refuses session-only writes", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "beta", id: "b" },
+			],
+		});
+		expect(await manager.listModelScope({ workspaceRoot: dir })).toMatchObject({
+			hasSession: false,
+			enabled: null,
+		});
+		await expect(
+			manager.setModelScope({
+				workspaceRoot: dir,
+				enabled: ["alpha/a"],
+				save: false,
+			}),
+		).rejects.toThrow(/Start a Pi session/);
+		await manager.setModelScope({
+			workspaceRoot: dir,
+			enabled: ["alpha/a"],
+			save: true,
+		});
+		expect(
+			(await manager.listModelScope({ workspaceRoot: dir })).enabled,
+		).toEqual(["alpha/a"]);
+	});
+
+	it("runs /model provider/model and /thinking level through Pi rather than ignoring arguments", async () => {
+		createManager({
+			models: [
+				{ provider: "p", id: "m" },
+				{ provider: "alpha", id: "a" },
+			],
+		});
+		await startPi(manager, "s-selection");
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-selection",
+				text: "/model alpha/a",
+			}),
+		).toMatchObject({
+			selection: { providerId: "alpha", modelId: "a" },
+		});
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-selection",
+				text: "/thinking high",
+			}),
+		).toMatchObject({
+			selection: { providerId: "alpha", modelId: "a", thinkingLevel: "high" },
+		});
+		expect(rpcTypes()).toContain("set_model");
+		expect(rpcTypes()).toContain("set_thinking_level");
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-selection",
+				text: "/model unknown/x",
+			}),
+		).toMatchObject({
+			uiAction: "model",
+			message: expect.stringContaining("Could not uniquely match"),
+		});
+		await expect(
+			manager.executeCommand({
+				sessionId: "s-selection",
+				text: "/thinking impossible",
+			}),
+		).rejects.toThrow(/Use \/thinking/);
+		expect(
+			await manager.executeCommand({ text: "/thinking low" }),
+		).toMatchObject({
+			selection: { thinkingLevel: "low" },
+		});
+		expect(await manager.executeCommand({ text: "/thinking" })).toMatchObject({
+			uiAction: "thinking",
+		});
+	});
+
+	it("reports Pi's effective thinking level after /model changes it", async () => {
+		createManager({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+			],
+			modelThinkingLevels: { "alpha/b": "low" },
+		});
+		await startPi(manager, "s-model-thinking");
+		await manager.executeCommand({
+			sessionId: "s-model-thinking",
+			text: "/thinking high",
+		});
+		expect(
+			await manager.executeCommand({
+				sessionId: "s-model-thinking",
+				text: "/model alpha/b",
+			}),
+		).toMatchObject({
+			selection: { providerId: "alpha", modelId: "b", thinkingLevel: "low" },
+		});
+		expect(rpcTypes()).toEqual(
+			expect.arrayContaining(["set_model", "get_state"]),
+		);
+		await startPi(manager, "s-model-thinking");
+		expect(
+			rpcTypes().filter((type) => type === "set_thinking_level"),
+		).toHaveLength(1);
+	});
+
+	it("returns the last Pi assistant text for /copy without sending it to the model", async () => {
+		createManager({ lastAssistantText: "Pi's final answer" });
+		await startPi(manager, "s-copy");
+		expect(
+			await manager.executeCommand({ sessionId: "s-copy", text: "/copy" }),
+		).toMatchObject({
+			clipboardText: "Pi's final answer",
+		});
+		expect(rpcTypes()).toContain("get_last_assistant_text");
+		expect(rpcTypes()).not.toContain("prompt");
+	});
+
 	it("compacts an idle session with custom instructions and does not invent a user turn", async () => {
 		createManager();
 		await startPi(manager, "s-compact");
@@ -903,9 +1295,10 @@ describe("PiSessionManager", () => {
 			uiAction: "new",
 			message: "Starting a new session.",
 		});
-		expect(
-			await manager.executeCommand({ text: "/model openai/gpt" }),
-		).toMatchObject({ handled: true, uiAction: "model" });
+		expect(await manager.executeCommand({ text: "/model" })).toMatchObject({
+			handled: true,
+			uiAction: "model",
+		});
 		expect(await manager.executeCommand({ text: "/settings" })).toMatchObject({
 			uiAction: "settings",
 		});

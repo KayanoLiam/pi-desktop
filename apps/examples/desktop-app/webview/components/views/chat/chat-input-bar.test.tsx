@@ -216,6 +216,7 @@ async function renderVoiceComposer({
 	autoApproveTools,
 	onAutoApproveToolsChange,
 	onPiSelectionChange,
+	onCyclePiModel,
 	executionTarget,
 	onAttachFiles = vi.fn(),
 	piCommandPending,
@@ -240,6 +241,7 @@ async function renderVoiceComposer({
 	onPiSelectionChange?: Parameters<
 		typeof ChatInputBar
 	>[0]["onPiSelectionChange"];
+	onCyclePiModel?: Parameters<typeof ChatInputBar>[0]["onCyclePiModel"];
 	executionTarget?: "cloud" | "local";
 	onAttachFiles?: Parameters<typeof ChatInputBar>[0]["onAttachFiles"];
 	piCommandPending?: boolean;
@@ -255,6 +257,7 @@ async function renderVoiceComposer({
 					autoApproveTools={autoApproveTools}
 					onAutoApproveToolsChange={onAutoApproveToolsChange}
 					onPiSelectionChange={onPiSelectionChange}
+					onCyclePiModel={onCyclePiModel}
 					readOnly={readOnly}
 					executionTarget={executionTarget}
 					attachments={attachments}
@@ -3138,6 +3141,32 @@ describe("ChatInputBar Pi slash submit", () => {
 		expect(container.querySelector("textarea")?.value).toBe("");
 	});
 
+	it("handles Ctrl+P in Pi sessions without submitting the draft", async () => {
+		const onSend = vi.fn();
+		const onCyclePiModel = vi.fn();
+		await renderVoiceComposer({
+			runtime: "pi",
+			provider: "alpha",
+			model: "a",
+			prompt: "unfinished draft",
+			onSend,
+			onCyclePiModel,
+		});
+		await act(async () => {
+			container.querySelector("textarea")?.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "p",
+					ctrlKey: true,
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		});
+		expect(onCyclePiModel).toHaveBeenCalledOnce();
+		expect(onSend).not.toHaveBeenCalled();
+		expect(container.querySelector("textarea")?.value).toBe("unfinished draft");
+	});
+
 	it("keeps a normal Pi draft blocked until a model is picked", async () => {
 		const onSend = vi.fn();
 		await renderVoiceComposer({
@@ -3175,6 +3204,8 @@ describe("ChatInputBar Pi slash submit", () => {
 			await Promise.resolve();
 		});
 		expect(container.textContent).toContain("/compact");
+		expect(container.textContent).toContain("/scoped-models");
+		expect(container.textContent).toContain("/thinking");
 		expect(container.textContent).toContain("/name");
 		expect(container.textContent).not.toContain("name <name>");
 		expect(container.textContent).not.toContain("/clone");

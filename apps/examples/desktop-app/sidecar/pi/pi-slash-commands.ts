@@ -87,12 +87,12 @@ export const PI_BUILTIN_SLASH_COMMANDS: PiBuiltinSlashCommand[] = [
 	},
 	{
 		name: "thinking",
-		description: "Set thinking level (use the desktop thinking control)",
+		description: "Set a Pi thinking level or open the thinking picker",
 		source: "builtin",
 	},
 	{
 		name: "scoped-models",
-		description: "Enable or disable models for cycling (terminal only)",
+		description: "Choose the models used for cycling in this session",
 		source: "builtin",
 	},
 	{
@@ -107,7 +107,7 @@ export const PI_BUILTIN_SLASH_COMMANDS: PiBuiltinSlashCommand[] = [
 	},
 	{
 		name: "copy",
-		description: "Copy the last agent message (not available in Desktop)",
+		description: "Copy the last Pi assistant message",
 		source: "builtin",
 	},
 	{
@@ -150,8 +150,8 @@ const PI_BUILTIN_NAMES = new Set(
 
 /**
  * Commands whose terminal behavior has a native desktop control.
- * `/thinking` is intentionally absent: the frozen uiAction union has no
- * thinking value, and the composer already exposes that picker.
+ * `/thinking` and `/scoped-models` open their Desktop pickers; arguments to
+ * `/thinking` and `/model` are handled by the session manager instead.
  */
 const DESKTOP_UI_ACTIONS: Record<
 	string,
@@ -164,6 +164,14 @@ const DESKTOP_UI_ACTIONS: Record<
 	model: {
 		uiAction: "model",
 		message: "Open the model picker to switch models.",
+	},
+	"scoped-models": {
+		uiAction: "scoped-models",
+		message: "Choose which Pi models are available for cycling.",
+	},
+	thinking: {
+		uiAction: "thinking",
+		message: "Open the Pi thinking level picker.",
 	},
 	settings: {
 		uiAction: "settings",
@@ -192,14 +200,9 @@ const UNSUPPORTED_BUILTIN_GUIDANCE: Record<string, string> = {
 	tree: "/tree is a terminal session-tree selector. Desktop does not open that view, and this command was not run.",
 	clone:
 		"/clone is not available in Desktop. Nothing was duplicated. Pi's terminal clone and fork pickers are not available for Pi threads here.",
-	thinking:
-		"/thinking was not applied. Use the Pi thinking level control in the composer.",
-	"scoped-models":
-		"/scoped-models is a terminal model-cycling selector. Desktop did not change that list.",
 	share:
 		"/share uploads the session as a secret GitHub gist. Desktop does not share or upload sessions. Nothing was shared.",
 	bug: "/bug is not available in Desktop. Nothing was reported or uploaded. Use Pi in a terminal to report a bug.",
-	copy: "/copy writes to the terminal clipboard, which Desktop does not control. Nothing was copied. Select the last agent message in the transcript to copy it.",
 	changelog:
 		"/changelog shows Pi's terminal changelog. Desktop does not open that view.",
 	hotkeys:

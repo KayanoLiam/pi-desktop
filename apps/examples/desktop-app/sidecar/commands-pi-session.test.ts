@@ -444,6 +444,61 @@ describe("Pi thread command routing", () => {
 		expect(reload.message).toMatch(/not available/i);
 	});
 
+	it("routes scoped-models and Ctrl+P only for local Pi threads", async () => {
+		fake.setScenario({
+			models: [
+				{ provider: "alpha", id: "a" },
+				{ provider: "alpha", id: "b" },
+				{ provider: "beta", id: "c" },
+			],
+		});
+		writePiSession("pi-owned", dir);
+		const scope = (await handleCommand(ctx, "get_pi_model_scope", {
+			sessionId: "pi-owned",
+		})) as { models: unknown[]; hasSession: boolean };
+		expect(scope).toMatchObject({ hasSession: true });
+		expect(scope.models).toHaveLength(3);
+		await handleCommand(ctx, "set_pi_model_scope", {
+			sessionId: "pi-owned",
+			enabled: ["alpha/a", "alpha/b"],
+			save: false,
+		});
+		const cycled = await handleCommand(ctx, "cycle_pi_model", {
+			sessionId: "pi-owned",
+		});
+		expect(cycled).toMatchObject({ providerId: "alpha", modelId: "a" });
+		expect(
+			await handleCommand(ctx, "cycle_pi_model", {
+				sessionId: "pi-owned",
+			}),
+		).toMatchObject({ providerId: "alpha", modelId: "b" });
+		expect(
+			fake.received().findLast((entry) => Array.isArray(entry.argv))?.argv,
+		).toContain("alpha/a,alpha/b");
+
+		for (const command of [
+			"get_pi_model_scope",
+			"set_pi_model_scope",
+			"cycle_pi_model",
+		]) {
+			await expect(
+				handleCommand(ctx, command, {
+					sessionId: "cline-session",
+					enabled: ["alpha/a"],
+					save: true,
+				}),
+			).rejects.toThrow(/local Pi session/);
+			await expect(
+				handleCommand(ctx, command, {
+					sessionId: "pi-owned",
+					environmentId: "ssh-host",
+					enabled: ["alpha/a"],
+					save: true,
+				}),
+			).rejects.toThrow(/local Pi session/);
+		}
+	});
+
 	it("rejects Pi commands for non-Pi or remote sessions", async () => {
 		writePiSession("pi-owned", dir);
 		await expect(

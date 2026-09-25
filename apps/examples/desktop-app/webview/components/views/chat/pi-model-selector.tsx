@@ -66,6 +66,7 @@ export function PiModelSelector({
 	const valueRef = useRef(value);
 	valueRef.current = value;
 	const lastReportedRef = useRef<string | null>(null);
+	const lastExternalSelectionRef = useRef<string | null>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly reloads models.json on request.
 	useEffect(() => {
@@ -146,6 +147,39 @@ export function PiModelSelector({
 		};
 	}, [revision]);
 
+	// Ctrl+P and slash-command changes can update the thread from outside this
+	// picker. Only respond when the prop changes, not while its own click is
+	// waiting for the parent to catch up (which would revert the user's click).
+	const externalProviderId = value?.providerId;
+	const externalModelId = value?.modelId;
+	const externalThinkingLevel = value?.thinkingLevel;
+	useEffect(() => {
+		if (!loaded) return;
+		const key = JSON.stringify([
+			externalProviderId,
+			externalModelId,
+			externalThinkingLevel,
+		]);
+		if (lastExternalSelectionRef.current === key) return;
+		lastExternalSelectionRef.current = key;
+		if (!externalProviderId || !externalModelId) return;
+		setSelection((current) => ({
+			...current,
+			providerId: externalProviderId,
+			modelByProvider: {
+				...current.modelByProvider,
+				[externalProviderId]: externalModelId,
+			},
+			thinkingByModel: externalThinkingLevel
+				? {
+						...current.thinkingByModel,
+						[piModelKey(externalProviderId, externalModelId)]:
+							externalThinkingLevel,
+					}
+				: current.thinkingByModel,
+		}));
+	}, [loaded, externalProviderId, externalModelId, externalThinkingLevel]);
+
 	// Installing or removing Pi packages/extensions changes the available
 	// providers and models; reload without requiring a manual refresh.
 	useEffect(() => {
@@ -169,6 +203,7 @@ export function PiModelSelector({
 
 	const providers = catalog?.providers ?? [];
 	const provider = providers.find((entry) => entry.id === selection.providerId);
+	const activeProviderId = provider?.id;
 	const modelId = selectedPiModelId(selection);
 	const model = provider?.models.find((entry) => entry.id === modelId);
 	const thinkingLevel = selectedPiThinkingLevel(selection, catalog);
@@ -183,16 +218,16 @@ export function PiModelSelector({
 
 	useEffect(() => {
 		if (!loaded) return;
-		const value: PiModelSelectionValue = {
-			providerId: provider?.id ?? "",
-			modelId: provider ? modelId : "",
+		const next: PiModelSelectionValue = {
+			providerId: activeProviderId ?? "",
+			modelId: activeProviderId ? modelId : "",
 			thinkingLevel,
 		};
-		const key = JSON.stringify(value);
+		const key = JSON.stringify(next);
 		if (lastReportedRef.current === key) return;
 		lastReportedRef.current = key;
-		onSelectionChangeRef.current?.(value);
-	}, [loaded, provider, model, thinkingLevel]);
+		onSelectionChangeRef.current?.(next);
+	}, [loaded, activeProviderId, modelId, thinkingLevel]);
 
 	return (
 		<div className="flex min-w-0 flex-col gap-1">

@@ -37,6 +37,10 @@ import { ChatInputBar } from "@/components/views/chat/chat-input-bar";
 import { ChatMessages } from "@/components/views/chat/chat-messages";
 import { EnvironmentSelector } from "@/components/views/chat/environment-selector";
 import type { PiModelSelectionValue } from "@/components/views/chat/pi-model-selector";
+import {
+	type PiModelScope,
+	PiScopedModelsDialog,
+} from "@/components/views/chat/pi-scoped-models-dialog";
 import { RemoteDirectoryPicker } from "@/components/views/chat/remote-directory-picker";
 import { WelcomeScreen } from "@/components/views/chat/welcome-chat";
 import type { SettingsSection } from "@/components/views/settings/sections";
@@ -82,6 +86,10 @@ import {
 	isUnsupportedImageAttachment,
 } from "@/lib/image-attachments";
 import { createLatestSuccessfulRequestGate } from "@/lib/latest-successful-request";
+import {
+	isPiThinkingLevel,
+	orderedPiCyclingModels,
+} from "@/lib/pi-model-selection";
 import {
 	type PiCommandHandled,
 	routePiCommandUiAction,
@@ -1706,12 +1714,86 @@ function ChatThreadPane({
 		[isCloudSession, setPendingAttachments],
 	);
 
+	const handleCyclePiModel = useCallback(async () => {
+		if (!isPiThread) return;
+		try {
+			let next: PiModelSelectionValue | null;
+			if (sessionId) {
+				const result = await desktopClient.invoke<{
+					providerId: string;
+					modelId: string;
+					thinkingLevel: string;
+				} | null>("cycle_pi_model", { sessionId });
+				next = result
+					? {
+							providerId: result.providerId,
+							modelId: result.modelId,
+							thinkingLevel: isPiThinkingLevel(result.thinkingLevel)
+								? result.thinkingLevel
+								: "",
+						}
+					: null;
+			} else {
+				const scope = await desktopClient.invoke<PiModelScope>(
+					"get_pi_model_scope",
+					{
+						workspaceRoot: config.workspaceRoot || config.cwd,
+					},
+				);
+				const models = orderedPiCyclingModels(scope.models, scope.enabled);
+				const index = models.findIndex(
+					(model) =>
+						model.provider === config.provider && model.id === config.model,
+				);
+				const candidate =
+					models.length > 1 ? models[(index + 1) % models.length] : undefined;
+				next = candidate
+					? {
+							providerId: candidate.provider,
+							modelId: candidate.id,
+							thinkingLevel: "",
+						}
+					: null;
+			}
+			if (!next) {
+				toast({
+					title: "Pi models",
+					description: "Only one model is available for cycling.",
+				});
+				return;
+			}
+			handlePiSelectionChange(next);
+			toast({
+				title: "Pi model",
+				description: `${next.providerId}/${next.modelId}`,
+			});
+		} catch (cause) {
+			toast({
+				variant: "destructive",
+				title: "Pi model cycling failed",
+				description: cause instanceof Error ? cause.message : String(cause),
+			});
+		}
+	}, [
+		isPiThread,
+		sessionId,
+		config.workspaceRoot,
+		config.cwd,
+		config.provider,
+		config.model,
+		handlePiSelectionChange,
+	]);
+
 	const [modelPickerRequest, setModelPickerRequest] = useState(0);
+	const [thinkingPickerRequest, setThinkingPickerRequest] = useState(0);
+	const [scopedModelsOpen, setScopedModelsOpen] = useState(false);
 	const routePiUiAction = useCallback(
 		(action: PiCommandHandled["uiAction"]) => {
 			routePiCommandUiAction(action, {
 				onNew: onNewThread,
 				onModel: () => setModelPickerRequest((current) => current + 1),
+				onScopedModels: () => setScopedModelsOpen(true),
+				onThinking: () => setThinkingPickerRequest((current) => current + 1),
 				onSettings: onOpenSettings,
 				onResume: onOpenSessionSearch,
 			});
@@ -1752,6 +1834,33 @@ function ChatThreadPane({
 			});
 			const piCommand = handled.current;
 			if (piCommand) {
+				if (piCommand.selection) {
+					const { providerId, modelId, thinkingLevel } = piCommand.selection;
+					const currentProvider = providerId || config.provider;
+					const currentModel = modelId || config.model;
+					if (currentProvider && currentModel) {
+						handlePiSelectionChange({
+							providerId: currentProvider,
+							modelId: currentModel,
+							thinkingLevel: isPiThinkingLevel(thinkingLevel)
+								? thinkingLevel
+								: "",
+						});
+					}
+				}
+				if (piCommand.clipboardText !== undefined) {
+					try {
+						await navigator.clipboard.writeText(piCommand.clipboardText);
+						toast({ title: "Pi response copied" });
+					} catch (cause) {
+						toast({
+							variant: "destructive",
+							title: "Could not copy Pi response",
+							description:
+								cause instanceof Error ? cause.message : String(cause),
+						});
+					}
+				}
 				if (piCommand.sessionTitle && sessionId) {
 					setManualTitle(piCommand.sessionTitle);
 					onUpdateSessionMetadata?.(sessionId, {
@@ -1777,6 +1886,9 @@ function ChatThreadPane({
 		},
 		[
 			config.repoUrl,
+			config.provider,
+			config.model,
+			handlePiSelectionChange,
 			handleAttachFiles,
 			historySession?.metadata,
 			isCloudSession,
@@ -2298,6 +2410,7 @@ function ChatThreadPane({
 			onAutoApproveToolsChange={handleAutoApproveToolsChange}
 			piSelection={piSelection}
 			onPiSelectionChange={handlePiSelectionChange}
+			onCyclePiModel={() => void handleCyclePiModel()}
 			readOnly={isCloudSessionExpired}
 			attachments={attachmentList}
 			environmentId={environmentId}
@@ -2314,6 +2427,7 @@ function ChatThreadPane({
 			piCommandPending={piCommandPending}
 			piCommandNotice={piCommandNotice}
 			modelPickerRequest={modelPickerRequest}
+			thinkingPickerRequest={thinkingPickerRequest}
 			onReasoningChange={handleReasoningChange}
 			onSteerPromptInQueue={steerPromptInQueue}
 			onEditPromptInQueue={updatePromptInQueue}
@@ -2498,6 +2612,12 @@ function ChatThreadPane({
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>
+			<PiScopedModelsDialog
+				onOpenChange={setScopedModelsOpen}
+				open={scopedModelsOpen}
+				sessionId={sessionId ?? undefined}
+				workspaceRoot={config.workspaceRoot || config.cwd}
+			/>
 		</WorkspaceProvider>
 	);
 }

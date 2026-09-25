@@ -2792,6 +2792,8 @@ export function useChatSession(environmentId: string) {
 				onPiCommand?.({
 					message: parsed.message,
 					uiAction: parsed.uiAction,
+					selection: parsed.selection,
+					clipboardText: parsed.clipboardText,
 					refresh: parsed.refresh,
 					preserveAttachments: true,
 					sessionTitle,
