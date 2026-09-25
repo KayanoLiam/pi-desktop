@@ -23,7 +23,6 @@ import {
 	Search,
 	Settings,
 	SlidersHorizontal,
-	Store,
 	Trash2,
 } from "lucide-react";
 import {
@@ -151,12 +150,10 @@ const SETTINGS_SECTION_ICONS = {
 	Import: Import,
 	Remote: Network,
 	Customize: Blocks,
-	Marketplace: Store,
 } satisfies Record<SettingsSection, typeof Settings>;
 
-// The Customize section is the installed inventory, so its nav row reads
-// "Installed" (it sits under a "Customize" group header / next to the
-// Marketplace row, which supplies the context).
+// The Customize section is the installed Pi extension inventory, so its
+// sidebar row reads "Installed" under the Extensions group.
 function settingsSectionLabel(section: SettingsSection): string {
 	return (
 		CUSTOMIZATION_SECTION_LABELS[
@@ -232,10 +229,9 @@ function SettingsSectionNavigation({
 					Settings
 				</p>
 			) : null}
-			{/* Schedules and Customize already have dedicated rows at the top of
-			    the expanded sidebar (Customize's Installed/Marketplace sub-tabs
-			    render under that row), so the section nav skips them there.
-			    The collapsed sidebar has no action rows and keeps them
+			{/* Schedules and Extensions already have dedicated rows at the top of
+			    the expanded sidebar (Installed renders under Extensions), so this
+			    section nav skips them there. The collapsed sidebar keeps them
 			    reachable. */}
 			{SETTINGS_SECTIONS.filter(
 				(section) => collapsed || section !== "Schedules",

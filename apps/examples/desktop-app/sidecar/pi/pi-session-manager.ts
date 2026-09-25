@@ -1373,6 +1373,18 @@ export class PiSessionManager {
 		}
 	}
 
+	/** Configuration changes must not delete a package while a Desktop Pi turn is using it. */
+	hasBusySessions(): boolean {
+		return [...this.live.values()].some(
+			(live) =>
+				live.busy ||
+				!!live.run ||
+				live.compacting ||
+				live.navigating ||
+				live.pendingUi.size > 0,
+		);
+	}
+
 	/** Pi configuration changed: restart idle processes now, busy ones after their run or compaction. */
 	markStale(): void {
 		this.commandsCache.clear();

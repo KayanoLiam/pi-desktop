@@ -282,11 +282,14 @@ describe("tool state controls", () => {
 		await act(async () => {
 			root.render(<CustomizationSectionView section="Tools" />);
 		});
-		await act(async () => {
-			container
-				.querySelector<HTMLInputElement>('[aria-label="Toggle web_search"]')
-				?.click();
+		const toggle = await vi.waitFor(() => {
+			const element = container.querySelector<HTMLInputElement>(
+				'[aria-label="Toggle web_search"]',
+			);
+			if (!element) throw new Error("Tool inventory has not loaded yet");
+			return element;
 		});
+		await act(async () => toggle.click());
 		expect(enabled).toBe(!initialEnabled);
 		expect(invoke).toHaveBeenCalledWith("set_tool_disabled", {
 			names: ["web_search", "web_search"],

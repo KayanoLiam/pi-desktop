@@ -1,6 +1,7 @@
 import {
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
@@ -186,6 +187,92 @@ afterEach(async () => {
 });
 
 describe("Pi thread command routing", () => {
+	it("lists and changes Pi extensions in the current local workspace, not Cline plugins", async () => {
+		const projectExtensions = join(dir, ".pi", "extensions");
+		mkdirSync(projectExtensions, { recursive: true });
+		writeFileSync(
+			join(projectExtensions, "desktop.ts"),
+			"export default () => {};\n",
+		);
+		const inventory = (await handleCommand(ctx, "list_pi_extensions")) as {
+			workspaceRoot: string;
+			extensions: Array<{
+				id: string;
+				name: string;
+				scope: string;
+				enabled: boolean;
+			}>;
+		};
+		expect(inventory.workspaceRoot).toBe(dir);
+		const item = inventory.extensions.find(
+			(entry) => entry.name === "desktop.ts",
+		);
+		expect(item).toMatchObject({ scope: "project", enabled: true });
+		if (!item || !ctx.pi)
+			throw new Error("Missing Pi test extension or session manager");
+		const stale = vi.spyOn(ctx.pi, "markStale");
+		const updated = (await handleCommand(ctx, "set_pi_extension_enabled", {
+			id: item.id,
+			enabled: false,
+		})) as typeof inventory;
+		expect(
+			updated.extensions.find((entry) => entry.id === item.id)?.enabled,
+		).toBe(false);
+		expect(stale).toHaveBeenCalledTimes(1);
+		expect(readFileSync(join(dir, ".pi", "settings.json"), "utf8")).toContain(
+			"-extensions/desktop.ts",
+		);
+		await expect(
+			handleCommand(ctx, "uninstall_pi_extension_package", { id: item.id }),
+		).rejects.toThrow("cannot be uninstalled");
+		await expect(
+			handleCommand(ctx, "set_pi_extension_enabled", {
+				id: item.id,
+				enabled: "false",
+			}),
+		).rejects.toThrow("boolean");
+		vi.spyOn(ctx.pi, "hasBusySessions").mockReturnValue(true);
+		await expect(
+			handleCommand(ctx, "set_pi_extension_enabled", {
+				id: item.id,
+				enabled: true,
+			}),
+		).rejects.toThrow("Pi is busy");
+		expect(stale).toHaveBeenCalledTimes(1);
+	});
+
+	it("uninstalls only the requested Pi package and keeps local files", async () => {
+		const packageDir = join(dir, "pi-package");
+		mkdirSync(join(packageDir, "extensions"), { recursive: true });
+		writeFileSync(
+			join(packageDir, "extensions", "package.ts"),
+			"export default () => {};\n",
+		);
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [packageDir] }),
+		);
+		const inventory = (await handleCommand(ctx, "list_pi_extensions")) as {
+			extensions: Array<{ id: string; name: string }>;
+		};
+		const item = inventory.extensions.find(
+			(entry) => entry.name === "package.ts",
+		);
+		if (!item) throw new Error("Missing Pi package test extension");
+		const updated = (await handleCommand(
+			ctx,
+			"uninstall_pi_extension_package",
+			{ id: item.id },
+		)) as typeof inventory;
+		expect(updated.extensions).toEqual([]);
+		expect(readFileSync(join(agentDir, "settings.json"), "utf8")).toContain(
+			'"packages": []',
+		);
+		expect(
+			readFileSync(join(packageDir, "extensions", "package.ts"), "utf8"),
+		).toContain("export default");
+	});
+
 	it("starts, sends, and reads back a Pi thread through chat_session_command", async () => {
 		const started = (await handleCommand(ctx, "chat_session_command", {
 			request: {

@@ -160,6 +160,11 @@ import {
 	sessionLogPath,
 	sharedSessionDataDir,
 } from "./paths";
+import {
+	listPiExtensions,
+	setPiExtensionEnabled,
+	uninstallPiExtensionPackage,
+} from "./pi/pi-extensions";
 import { getPiSessionManager } from "./pi/pi-session-manager";
 import { getPullRequestStatus } from "./pull-request";
 import { capturePullRequestEvent } from "./pull-request-telemetry";
@@ -2924,6 +2929,41 @@ export async function handleCommand(
 					`Unsupported Composio integrations operation: ${operation}`,
 				);
 		}
+	}
+
+	// ── Pi extensions (the current local workspace, never Cline Hub plugins) ──
+	if (command === "list_pi_extensions") {
+		return await listPiExtensions(ctx.localWorkspaceRoot);
+	}
+	if (
+		command === "set_pi_extension_enabled" ||
+		command === "uninstall_pi_extension_package"
+	) {
+		const id = args?.id;
+		if (typeof id !== "string" || !id)
+			throw new Error("Pi extension ID is required.");
+		if (
+			command === "set_pi_extension_enabled" &&
+			typeof args?.enabled !== "boolean"
+		) {
+			throw new Error("Pi extension enabled state must be a boolean.");
+		}
+		const manager = getPiSessionManager(ctx);
+		if (manager.hasBusySessions()) {
+			throw new Error(
+				"Pi is busy. Wait for the session to finish before changing extensions.",
+			);
+		}
+		const inventory =
+			command === "set_pi_extension_enabled"
+				? await setPiExtensionEnabled(
+						ctx.localWorkspaceRoot,
+						id,
+						args?.enabled as boolean,
+					)
+				: await uninstallPiExtensionPackage(ctx.localWorkspaceRoot, id);
+		manager.markStale();
+		return inventory;
 	}
 
 	// ── Provider management ────────────────────────────────────────────

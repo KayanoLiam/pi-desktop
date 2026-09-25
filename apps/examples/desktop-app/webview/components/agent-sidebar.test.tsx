@@ -1116,55 +1116,43 @@ describe("AgentSidebar session organization", () => {
 		expect(onSettingsSectionChange).toHaveBeenCalledWith("Customize");
 	});
 
-	it("shows Installed and Marketplace sub-tabs under the open Customize row", async () => {
+	it("shows only Installed under Extensions, without a Cline marketplace", async () => {
 		const onSettingsSectionChange = vi.fn();
-		const renderSidebar = async (section: "Customize" | "Marketplace") => {
-			await act(async () => {
-				root.render(
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={onSettingsSectionChange}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection={section}
-							view="settings"
-						/>
-					</SidebarProvider>,
-				);
-			});
-		};
-
-		await renderSidebar("Customize");
+		await act(async () => {
+			root.render(
+				<SidebarProvider>
+					<AgentSidebar
+						activeSessionId={null}
+						onHome={vi.fn()}
+						onSettingsSectionChange={onSettingsSectionChange}
+						sessionHistory={makeSessionHistory([], vi.fn())}
+						setView={vi.fn()}
+						settingsSection="Customize"
+						view="settings"
+					/>
+				</SidebarProvider>,
+			);
+		});
 		const actionsNav = container.querySelector(
 			'[aria-label="Sidebar actions"]',
 		) as ParentNode;
 		const installedRow = buttonWithText("Installed", actionsNav);
-		const marketplaceRow = buttonWithText("Marketplace", actionsNav);
 		const customizeRow = buttonWithText("Extensions", actionsNav);
 
-		// The active sub-tab carries the full selected background; the parent
-		// Customize row stays marked with a subtler highlight so the two
-		// simultaneous highlights read differently.
 		expect(installedRow.getAttribute("aria-current")).toBe("page");
 		expect(installedRow.className.split(" ")).toContain("bg-surface-hover");
 		expect(customizeRow.className.split(" ")).toContain(
 			"bg-surface-hover-lighter",
 		);
-		expect(customizeRow.className.split(" ")).not.toContain("bg-surface-hover");
-		// Sub-tabs are indented under the parent row.
 		expect(installedRow.className.split(" ")).toContain("pl-8!");
+		expect(
+			[...actionsNav.querySelectorAll("button")].some((button) =>
+				button.textContent?.includes("Marketplace"),
+			),
+		).toBe(false);
 
-		await click(marketplaceRow);
-		expect(onSettingsSectionChange).toHaveBeenCalledWith("Marketplace");
-		await renderSidebar("Marketplace");
-		expect(
-			buttonWithText("Marketplace", actionsNav).getAttribute("aria-current"),
-		).toBe("page");
-		expect(
-			buttonWithText("Installed", actionsNav).getAttribute("aria-current"),
-		).toBeNull();
+		await click(installedRow);
+		expect(onSettingsSectionChange).toHaveBeenCalledWith("Customize");
 	});
 
 	it("highlights the New row only while the new-task page is active", async () => {
@@ -1255,9 +1243,7 @@ describe("AgentSidebar session organization", () => {
 			);
 		});
 
-		expect(
-			container.querySelector('[aria-label="Pi home"]'),
-		).not.toBeNull();
+		expect(container.querySelector('[aria-label="Pi home"]')).not.toBeNull();
 		expect(
 			container.querySelector('[aria-label="Sidebar actions"]'),
 		).toBeNull();
@@ -1293,6 +1279,7 @@ describe("AgentSidebar session organization", () => {
 		expect(
 			container.querySelector('[aria-label="Settings sections"]'),
 		).not.toBeNull();
+		expect(container.querySelector('[aria-label="Marketplace"]')).toBeNull();
 		const leftAlignedButtons = [
 			"Pi home",
 			"General",
