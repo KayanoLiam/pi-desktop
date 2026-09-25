@@ -103,21 +103,77 @@ so an extension named `compact` does not replace `/compact`. A handled command
 is not sent to the model. `refresh: true` reloads the open transcript and asks
 the sidebar to refresh metadata; it does not start a desktop chat turn.
 `/compact` is that path (Pi may still call a model inside its own compact RPC).
-`/new`, `/model`, `/settings`, and `/resume` do not require a live Pi process:
-they open the new-thread action, the model picker, desktop Settings, and session
-search. Those are not Pi's full TUI pickers. `/fork` stays guidance — desktop
-fork is disabled for Pi threads and is not Pi's message picker. `/name` updates
-the session title, `/session` shows statistics, and `/export` writes HTML when
-Pi can export; JSONL export is not available. Other builtins such as `/clone`,
-`/tree`, and `/share` show guidance instead of running or uploading anything.
-The static fallback menu does not advertise clone/tree. Extension, skill, and
-prompt commands that the endpoint reports as unhandled still follow the normal
-prompt path. A transport error keeps the draft and attachments. A handled
-command clears only the command text.
+`/name` updates the session title, `/session` shows statistics, `/copy` copies
+the last Pi response, and `/export` writes HTML when Pi can export; JSONL export
+is not available. `/model <model>` switches to a uniquely matching model (an
+ambiguous match points to the picker) and `/thinking <level>` sets the level.
+Without arguments, `/new`, `/model`, `/thinking`, `/settings`, and `/resume`
+open the new-thread action, the model and thinking pickers, desktop Settings,
+and session search; they do not require a live Pi process and are not Pi's
+full TUI pickers. `/tree` and `/scoped-models` open the dialogs described
+below. `/fork` stays guidance: desktop fork is disabled for Pi threads and Pi's
+message picker is not available. Other builtins such as `/clone`, `/share`,
+`/import`, and `/reload` show guidance instead of running or uploading
+anything. Extension, skill, and prompt commands that the endpoint reports as
+unhandled still follow the normal prompt path. A transport error keeps the
+draft and attachments. A handled command clears only the command text.
 
-Not supported for Pi threads yet: fork, editing an earlier message, file
-checkpoints, editing or removing one queued message (only stop-and-resend), and
-SSH remote environments (they stay on the Cline runtime).
+### Session tree (`/tree`)
+
+`/tree` opens a dialog with the thread's full Pi session tree, read from the
+live Pi process (`get_tree`, including an unsaved leaf). It requires an idle,
+local Pi thread. RPC exposes `get_tree` but no navigation request, so the gate
+extension also registers an internal `__pi_desktop_tree_jump` command that
+calls Pi's own `navigateTree`; no prompt reaches a model. The sidecar refuses
+to navigate if that command is not registered in the running process (an
+unknown slash command would otherwise be sent to the model as a prompt) and
+checks that Pi actually moved to the expected leaf.
+
+Choosing one of your earlier messages works like Pi's re-edit: the leaf moves
+to just before it and its text returns to the composer, so sending it starts a
+new branch. The desktop asks before replacing a current draft or attachments,
+and warns that images from the original message cannot be restored.
+
+### Model cycling (`/scoped-models`, Ctrl+P)
+
+**Ctrl+P** in the composer of a live Pi thread calls Pi's `cycle_model`, the
+same scoped cycle as the terminal, not a desktop approximation. `/scoped-models`
+opens **Model Configuration** to choose which models the cycle uses; the current
+model does not change, and selecting none or all of them means unrestricted.
+
+- **Apply to session** affects only that thread. RPC cannot change scoped models
+  in a running process, so the sidecar restarts the thread's Pi process with
+  `--models` on the same session file; the transcript is kept.
+- **Save to Pi settings** writes `enabledModels` through Pi's `SettingsManager`.
+  This is a Pi configuration write, unlike the read-only model catalog. Without
+  an open session it is the only option.
+
+### Pi extensions (Settings → Extensions)
+
+**Extensions → Installed** lists the extensions Pi resolves for the desktop's
+local workspace, from the global Pi agent directory and the project's `.pi`,
+grouped into npm packages, git packages, and local extensions. The sidecar
+(`sidecar/pi/pi-extensions.ts`) uses Pi's `SettingsManager` and
+`DefaultPackageManager`; resolving skips missing packages, so viewing the page
+never installs or updates anything. "Enabled" means configured to load in a new
+Pi process.
+
+- The toggle writes the same exact `+path` / `-path` override as Pi's `/config`
+  resource selector, in the resource's own scope.
+- **Uninstall** (npm and git packages only, after confirmation) removes the
+  package from the global or project Pi configuration, which also removes every
+  skill, prompt, and theme it supplies. Local extension files can only be
+  disabled, and are not deleted.
+- Changes are refused while a desktop Pi thread is running. Afterwards idle
+  desktop Pi processes are stopped and relaunch with the new configuration on
+  the next send, so finish an unsent `/tree` re-edit first. The page links to
+  [pi.dev/packages](https://pi.dev/packages) for browsing. The inherited Cline marketplace route was removed from Settings;
+  the Cline inventory data and services are left in place.
+
+Not supported for Pi threads yet: fork, the transcript's inline message editing
+(`/tree` re-edit is the supported path), file checkpoints, editing or removing
+one queued message (only stop-and-resend), and SSH remote environments (they
+stay on the Cline runtime).
 
 ## Pi model selection
 
@@ -133,8 +189,9 @@ level is remembered per provider/model pair.
 The catalog reads the user's Pi agent directory (`~/.pi/agent`, or
 `$PI_CODING_AGENT_DIR`): `auth.json`, `models.json`, cached `models-store.json`,
 and `settings.json`. It lists configured/available providers rather than the
-whole built-in catalog, and applies `enabledModels` using Pi's provider-qualified
-and wildcard scope rules. Saved Pi startup defaults are used only when the
+whole built-in catalog, and applies `enabledModels` through Pi's own scope
+resolver (`resolveModelScopeWithDiagnostics`: provider-qualified and bare IDs,
+globs, fuzzy matches, thinking suffixes) rather than a desktop re-implementation. Saved Pi startup defaults are used only when the
 desktop has no remembered selection; a session opened from history seeds the
 picker with the model it was recorded with. The picker reloads on
 `pi_config_changed`; **Refresh Pi models** forces a reload.
@@ -191,15 +248,21 @@ From `apps/examples/desktop-app/`:
 After building the SDK from the repository root, run these from this directory:
 
 ```sh
-# Pi execution, session files, command routing, catalog, picker, composer, theme
+# Pi execution, session files, command routing, catalog, picker, slash commands,
+# tree and scoped-model dialogs, extensions page, composer, chat hook, theme
 PI_DESKTOP_PI_BIN=/nonexistent-pi-test bun x vitest run \
   sidecar/pi \
   sidecar/commands-pi-session.test.ts \
   sidecar/pi-model-catalog.test.ts \
   sidecar/commands-pi-model-catalog.test.ts \
   webview/lib/pi-model-selection.test.ts \
+  webview/lib/pi-slash-command.test.ts \
   webview/components/views/chat/pi-model-selector.test.tsx \
+  webview/components/views/chat/pi-scoped-models-dialog.test.tsx \
+  webview/components/views/chat/pi-tree-dialog.test.tsx \
+  webview/components/views/settings/pi-extensions-view.test.tsx \
   webview/components/views/chat/chat-input-bar.test.tsx \
+  webview/hooks/use-chat-session.test.tsx \
   webview/hooks/chat-session/helpers.test.ts \
   webview/lib/theme.test.ts \
   --config vitest.config.ts
@@ -226,14 +289,21 @@ temporary directory so no suite reads a real `~/.pi/agent`. Pi runtime tests
 drive a scripted fake `pi` (`sidecar/pi/test-helpers/fake-pi.ts`) that speaks
 the JSONL protocol. Do not use personal credentials for test fixtures.
 
-**Known baseline (macOS, this step):** the full Vitest run had 1568 passing and
-3 failing tests, the same three inherited failures as before: worktree path
-canonicalization (`/var` vs `/private/var`), a timezone-dependent session
-label, and jsdom's missing `scrollTo`. Webview TypeScript reported 107
-diagnostics (unchanged; none in the files touched by the Pi work). Sidecar
-`typecheck`, `build:web`, `build:sidecar` and the Bun script suites passed.
-Biome still reports the inherited findings in untouched files. Rust checks were
-not re-run in this step. These are local results, not passing desktop GitHub CI.
+**Known baseline (macOS, commit `f87141ee2`, when Pi execution landed):** the
+full Vitest run had 1568 passing and 3 failing tests, the same three inherited
+failures as before: worktree path canonicalization (`/var` vs `/private/var`),
+a timezone-dependent session label, and jsdom's missing `scrollTo`. Webview
+TypeScript reported 107 diagnostics (unchanged; none in the files touched by
+the Pi work). Sidecar `typecheck`, `build:web`, `build:sidecar` and the Bun
+script suites passed. Biome still reports the inherited findings in untouched
+files. Rust checks were not re-run in this step. These are local results, not
+passing desktop GitHub CI.
+
+**Later spot check (macOS, commit `fbd38ff79`):** only the focused Pi command
+above was run: 18 files, 369 passing and 1 failing test. The failure is
+deterministic: `pi-model-selector.test.tsx` › "seeds a resumed session's
+recorded model and keeps it when the catalog lacks it". The full suite,
+typechecks, builds and Rust checks were not re-run at this commit.
 
 ### Checking webview changes
 
@@ -310,9 +380,10 @@ bun tauri icon /tmp/app-icon-macos.png -o /tmp/icons-macos && cp /tmp/icons-maco
 > (`io.github.kayanoliam.pi-desktop`, plus `.dev` / `.beta` / `.nightly`) and
 > the updater endpoints are empty, so a packaged build never polls Cline's
 > feed, but the updater `pubkey`, the `desktop-publish` workflow, and the
-> `publish-desktop` skill are still Cline's. Local packaging (below) is the
-> only verified way to produce a Pi build; don't tag releases from the
-> inherited workflow.
+> `publish-desktop` skill are still Cline's. Produce Pi builds with local
+> packaging (below) or the manual `pi-desktop-package` workflow (see
+> "Shareable Desktop Packages"); don't tag releases from the inherited
+> workflow.
 
 The drag-to-Applications window is configured by `bundle.macOS.dmg` in
 [`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json). Its artwork comes
@@ -352,9 +423,13 @@ agent-run commands would miss Homebrew-installed tools like `gh` even though
 they work fine from a terminal. At startup the sidecar asks the user's login
 shell — read from the account database via `getpwuid`, falling back to
 `$SHELL` — for its `PATH` and merges it into `process.env.PATH`, which every
-agent-spawned child (run_commands, MCP servers) inherits. Only `PATH` is
-imported, deliberately; other login-environment variables (`SSH_AUTH_SOCK`,
-API keys, `JAVA_HOME`-style tool roots) are not pulled in. Set
+agent-spawned child (run_commands, MCP servers, Pi processes) inherits. The
+same probe also imports the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY`, `NO_PROXY` and their lowercase forms), filling in only ones the
+launcher left unset, so Dock-launched Pi reaches model APIs the way it does from
+a terminal; the sidecar log names the imported variables, never their values.
+Nothing else is imported, deliberately; other login-environment variables
+(`SSH_AUTH_SOCK`, API keys, `JAVA_HOME`-style tool roots) are not pulled in. Set
 `CLINE_SIDECAR_SKIP_SHELL_PATH=1` to disable. Implementation and details:
 [`core shell-path.ts`](../../../sdk/packages/core/src/remote/shell-path.ts).
 
@@ -426,6 +501,12 @@ desktop integration notes.
 
 ## Releases & Auto-Updates
 
+> **Inherited Cline process, not used for Pi.** Pi builds ship with empty
+> updater endpoints and do not auto-update; the updater `pubkey` below is
+> still Cline's. Pi test installers come from the manual `pi-desktop-package`
+> workflow or local packaging (next section). The rest of this section
+> describes Cline's release flow.
+
 Releases are built, signed, notarized, and published by the `desktop-publish`
 GitHub workflow as a single universal macOS DMG — one download that runs
 natively on both Apple Silicon and Intel (macOS picks the matching slice at
@@ -453,6 +534,19 @@ Tauri desktop bundles are OS-specific, so build each package on the target OS:
 - macOS: `bun run package:desktop:mac`
 - Windows: `bun run package:desktop:windows`
 - Linux: `bun run package:desktop:linux`
+
+To build on all platforms without local machines, run the
+[`pi-desktop-package`](../../../.github/workflows/pi-desktop-package.yml)
+workflow manually (`workflow_dispatch`). It builds SDK exports, then packages
+macOS arm64 and x64 (`--allow-unsigned-mac`, ad-hoc signed DMG and zip),
+Windows (`bunx tauri build --bundles nsis`; Tauri's WiX/MSI bundler rejects the
+`0.1.0-beta.1` version) and Linux (`--bundles deb,rpm`; AppImage fails on the
+runner). On Windows it seeds Bun's cache with the version-matched Linux
+runtimes from Bun's official release ZIPs, because Bun's own cross-compile
+extraction for the bundled SSH helpers fails there. Installers are uploaded as
+workflow artifacts (30-day retention). The workflow only checks that each
+installer exists: it does not sign, notarize, run tests or the app, publish a
+release, or update any updater feed.
 
 The macOS package script refuses to create a shareable package unless Developer ID signing and notarization credentials are configured. This prevents the common Gatekeeper failure where a downloaded unsigned build appears damaged on a teammate's Mac.
 
@@ -520,6 +614,9 @@ Desktop transport envelope:
 - [`sidecar/chat-session.ts`](./sidecar/chat-session.ts) - chat session router (Pi threads → `sidecar/pi/`, else shared Hub)
 - [`sidecar/pi/pi-session-manager.ts`](./sidecar/pi/pi-session-manager.ts) - Pi RPC processes, event translation, approvals
 - [`sidecar/pi/pi-session-files.ts`](./sidecar/pi/pi-session-files.ts) - read-only Pi session history
+- [`sidecar/pi/pi-slash-commands.ts`](./sidecar/pi/pi-slash-commands.ts) - Pi builtin slash commands, desktop UI actions, guidance
+- [`sidecar/pi/pi-extensions.ts`](./sidecar/pi/pi-extensions.ts) - installed Pi extensions: list, enable/disable, uninstall
+- [`sidecar/pi/pi-desktop-gate-extension.ts`](./sidecar/pi/pi-desktop-gate-extension.ts) - generated tool-approval gate and tree-navigation command
 - [`webview/lib/desktop-client.ts`](./webview/lib/desktop-client.ts) - typed desktop websocket client
 - [`webview/hooks/use-chat-session.ts`](./webview/hooks/use-chat-session.ts) - UI chat session state + backend subscriptions
 - [`webview/lib/chat-schema.ts`](./webview/lib/chat-schema.ts) - chat message schema used by the UI

@@ -20,9 +20,10 @@
 
 > **Early preview — chat runs through your installed Pi CLI.**
 > New local threads execute through `pi --mode rpc`: streaming answers,
-> thinking, tool calls, approvals, cancellation, Pi session history and Pi's
-> slash commands. This is an independent desktop project, currently being
-> migrated from Cline; parts of the tree are still inherited Cline code.
+> thinking, tool calls, approvals, cancellation, Pi session history, session
+> tree navigation and Pi's slash commands. This is an independent desktop
+> project, currently being migrated from Cline; parts of the tree are still
+> inherited Cline code.
 
 ## What works today
 
@@ -32,14 +33,17 @@
 - **Extension dialogs.** When an installed Pi extension asks a question (`select`, `input`, `confirm`, `editor`), it appears as a question card in the chat; notifications land in the transcript log.
 - **Stop, queue, steer.** Stop a running turn; messages sent while Pi is busy queue as follow-ups.
 - **Pi session history.** Sessions from `~/.pi/agent/sessions` appear in the sidebar with the **Pi** source label. Open one to read it, continue it (Pi is relaunched on that session file), rename or delete it; the same sessions show up in `pi /resume`.
-- **Pi's slash commands.** Typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace. Installing or removing Pi packages in a terminal refreshes the list and the model picker automatically.
-- **Your configured Pi models.** Browse providers and models from your local Pi configuration, filtered by `enabledModels`, rather than an unfiltered built-in catalog.
+- **Pi's slash commands.** Typing `/` lists the extension commands, prompt templates and skills your installed Pi offers for that workspace. Builtins run in the app where they can: `/compact`, `/name`, `/session`, `/copy`, `/export` (HTML), `/model <model>` and `/thinking <level>`; `/new`, `/model`, `/thinking`, `/settings` and `/resume` open the matching desktop controls. Installing or removing Pi packages in a terminal refreshes the list and the model picker automatically.
+- **Session tree.** `/tree` shows the thread's whole Pi session tree and switches branches without a model turn. Picking an earlier message of yours rewinds to just before it and puts its text back in the composer, so sending starts a new branch (images from that message are not restored).
+- **Model cycling.** On a live thread, **Ctrl+P** cycles through Pi's scoped models. `/scoped-models` chooses which models are in that cycle, either for the current session or saved to Pi's `enabledModels`.
+- **Pi extensions in Settings.** **Extensions → Installed** lists the extensions your global and project Pi configuration resolve. Enable or disable each one, or uninstall an npm/git package after confirmation (local extension files can only be disabled). Browsing links to [pi.dev/packages](https://pi.dev/packages); the app never installs or updates packages.
+- **Your configured Pi models.** Browse providers and models from your local Pi configuration, filtered by `enabledModels` with Pi's own resolver, rather than an unfiltered built-in catalog.
 - **Selections that stay with you.** Each provider remembers its model; each provider/model pair remembers its thinking level. Pi startup defaults seed the picker when no desktop selection is saved.
 - **Model-aware thinking controls.** Available levels come from model capabilities. Unknown extension capabilities are not guessed.
 - **Light and dark themes.** Saved preferences and system appearance are respected, with a coral accent and the Pi mark throughout the app.
 - **A local-first entry screen.** Choose a workspace and see its branch without Cline onboarding or an account sign-in. Cline Cloud is disabled.
 
-Not yet: forking or editing earlier messages of a Pi thread, editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). Sidebar entries such as **Automations** and **Extensions** are inherited UI surfaces, not Pi features.
+Not yet: forking a Pi thread, the transcript's inline message editing (use `/tree` to re-edit from an earlier message instead), editing or removing a single queued message, file checkpoints, and SSH remote threads (those still run on the inherited Cline runtime). The **Automations** sidebar entry is an inherited UI surface, not a Pi feature.
 
 ## Install (macOS beta)
 
@@ -84,7 +88,7 @@ This launches the **native Tauri app**. Its development webview uses port `3125`
 
 For browser-only debugging, use `bun run dev:headless` from the app directory. It does **not** open a native window. An older installed Cline app does not reflect this checkout.
 
-macOS is the currently exercised native development platform. Inherited Windows/Linux packaging scripts are not a verified Pi Desktop release matrix. Use the source workflow above; signing, updater endpoints, and standalone distribution still need migration.
+macOS on Apple Silicon is the currently exercised native platform. The manual [`pi-desktop-package`](.github/workflows/pi-desktop-package.yml) GitHub workflow packages unsigned test installers for macOS (Apple Silicon and Intel, ad-hoc signed), Windows (NSIS) and Linux (DEB/RPM) as workflow artifacts. It only checks that each installer is produced, so the Intel, Windows and Linux builds are untested beyond packaging and are not published as releases. Signing, notarization, updates, and release automation still need migration.
 
 ## Bring your Pi configuration
 
@@ -95,7 +99,7 @@ The catalog reads `~/.pi/agent`, or the directory selected by `PI_CODING_AGENT_D
 | `auth.json` | Locally configured provider credentials and availability |
 | `models.json` | Custom providers and models |
 | `models-store.json` | Cached provider model metadata |
-| `settings.json` | `enabledModels`, startup defaults, and thinking preferences |
+| `settings.json` | `enabledModels`, startup defaults, thinking preferences, and the packages and extensions shown in **Extensions → Installed** |
 
 Configure providers in Pi, then use the picker’s refresh control to reload. Model identity always includes **both provider ID and model ID**, so identical model names from different providers do not share a selection. A listed credential does not prove that a future model request will succeed.
 
@@ -110,6 +114,8 @@ Every active thread is a real `pi --mode rpc` process (the user's installed Pi, 
 
 The model picker's catalog path is read-only (no credential refresh, no config writes, no API-key commands, no inference). Providers registered by installed Pi extensions are discovered by launching `pi` in RPC mode with `PI_OFFLINE=1`, no session and no tools; if Pi is unavailable, exact authenticated references stay visible with unknown thinking capabilities and nothing is invented.
 
+Two desktop actions do change your Pi configuration, and only when you ask: **Save to Pi settings** in `/scoped-models` writes `enabledModels`, and **Extensions → Installed** writes enable/disable overrides or removes a package from your global or project Pi settings.
+
 ## Architecture and migration
 
 ```text
@@ -120,7 +126,7 @@ Next.js / React webview
 Bun sidecar
         ├── Pi threads: one `pi --mode rpc` process per active session
         ├── Pi session files (~/.pi/agent/sessions) for history
-        ├── Pi configuration and model catalog
+        ├── Pi configuration: model catalog, scoped models, installed extensions
         └── Inherited Cline runtime (existing Cline sessions, SSH environments)
 ```
 
@@ -133,14 +139,14 @@ The goal is a standalone Pi desktop app. **This checkout is not standalone yet:*
 | [`docs/images/`](docs/images/) | Screenshots used by this README |
 | Other `apps/` directories | Retained upstream projects; not the focus of Pi Desktop |
 
-Existing Cline sessions and SSH environments retain their legacy execution paths. Removing Cline account screens does not remove those runtime dependencies. Bundle identifiers and updater configuration also still contain Cline values; they must be migrated before distributing an independent release.
+Existing Cline sessions and SSH environments retain their legacy execution paths. Removing Cline account screens does not remove those runtime dependencies. Bundle identifiers are Pi's own (`io.github.kayanoliam.pi-desktop`) and the updater endpoints are empty, so builds never check Cline's update feed; the updater signing key and the release workflow are still Cline's and must be replaced before an independent, auto-updating release.
 
 ### Next milestones
 
-- Fork, message editing and per-item queue editing for Pi threads; SSH remote threads through Pi.
+- Fork, inline message editing and per-item queue editing for Pi threads; SSH remote threads through Pi.
 - Replace or extract the remaining Cline workspace/runtime dependencies.
-- Migrate application identifiers, updates, signing, and release automation.
-- Resolve inherited test/type/lint failures and establish desktop CI across supported platforms.
+- Migrate updates, signing, notarization, and release automation.
+- Resolve inherited test/type/lint failures and establish desktop test CI (today only the manual packaging workflow exists).
 
 ## Development
 
