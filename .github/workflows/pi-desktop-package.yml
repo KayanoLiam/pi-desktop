@@ -78,6 +78,11 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
+      # Workspace packages resolve @cline/shared and the other SDK exports
+      # through dist/, not source. The first Tauri pre-build step needs them.
+      - name: Build SDK packages
+        run: bun run build:sdk
+
       - name: Package macOS (ad-hoc signed, not notarized)
         if: runner.os == 'macOS'
         working-directory: apps/examples/desktop-app
