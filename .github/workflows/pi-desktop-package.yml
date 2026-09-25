@@ -126,7 +126,14 @@ jobs:
               test -n "$(find "$root" -maxdepth 1 -name '*.dmg' -print -quit)"
               ;;
             windows) test -n "$(find "$root" -maxdepth 1 -name '*.exe' -print -quit)" ;;
-            linux) test -n "$(find "$root" -maxdepth 1 -name '*.deb' -print -quit)" && test -n "$(find "$root" -maxdepth 1 -name '*.rpm' -print -quit)" ;;
+            linux)
+              deb="$(find "$root" -maxdepth 1 -name '*.deb' -print -quit)"
+              rpm_file="$(find "$root" -maxdepth 1 -name '*.rpm' -print -quit)"
+              test -n "$deb" && test -n "$rpm_file"
+              # Ubuntu universe already ships an unrelated package named "pi".
+              test "$(dpkg-deb -f "$deb" Package)" = pi-desktop
+              rpm -qp --queryformat 'rpm package name: %{NAME}\n' "$rpm_file"
+              ;;
           esac
 
       - name: Upload test installers
