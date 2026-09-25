@@ -163,6 +163,10 @@ export function PiModelSelector({
 		if (lastExternalSelectionRef.current === key) return;
 		lastExternalSelectionRef.current = key;
 		if (!externalProviderId || !externalModelId) return;
+		// Same rule as the initial seed: a provider the catalog does not know
+		// would leave the picker empty, so the remembered selection stays.
+		if (!catalog?.providers.some((entry) => entry.id === externalProviderId))
+			return;
 		setSelection((current) => ({
 			...current,
 			providerId: externalProviderId,
@@ -178,7 +182,13 @@ export function PiModelSelector({
 					}
 				: current.thinkingByModel,
 		}));
-	}, [loaded, externalProviderId, externalModelId, externalThinkingLevel]);
+	}, [
+		loaded,
+		catalog,
+		externalProviderId,
+		externalModelId,
+		externalThinkingLevel,
+	]);
 
 	// Installing or removing Pi packages/extensions changes the available
 	// providers and models; reload without requiring a manual refresh.
