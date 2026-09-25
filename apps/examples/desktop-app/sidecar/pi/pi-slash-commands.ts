@@ -40,6 +40,11 @@ export const PI_BUILTIN_SLASH_COMMANDS: PiBuiltinSlashCommand[] = [
 		source: "builtin",
 	},
 	{
+		name: "tree",
+		description: "Browse the session tree and switch branches",
+		source: "builtin",
+	},
+	{
 		name: "new",
 		description: "Start a new session",
 		source: "builtin",
@@ -169,6 +174,10 @@ const DESKTOP_UI_ACTIONS: Record<
 		uiAction: "scoped-models",
 		message: "Choose which Pi models are available for cycling.",
 	},
+	tree: {
+		uiAction: "tree",
+		message: "Open the Pi session tree.",
+	},
 	thinking: {
 		uiAction: "thinking",
 		message: "Open the Pi thinking level picker.",
@@ -197,7 +206,6 @@ const UNSUPPORTED_BUILTIN_GUIDANCE: Record<string, string> = {
 		"/reload is not available through Pi's RPC mode. Desktop did not reload keybindings, extensions, skills, prompts, themes, or context files. Restart the Pi session, or run pi in a terminal and use /reload.",
 	import:
 		"/import is not available in Desktop. Pi's terminal command replaces the current session from a JSONL file after confirmation, and that operation is not a session RPC command. Nothing was imported.",
-	tree: "/tree is a terminal session-tree selector. Desktop does not open that view, and this command was not run.",
 	clone:
 		"/clone is not available in Desktop. Nothing was duplicated. Pi's terminal clone and fork pickers are not available for Pi threads here.",
 	share:

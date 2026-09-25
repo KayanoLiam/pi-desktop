@@ -31,6 +31,7 @@ describe("pi slash command helpers", () => {
 			"new",
 			"model",
 			"scoped-models",
+			"tree",
 			"thinking",
 			"settings",
 			"resume",
@@ -40,7 +41,7 @@ describe("pi slash command helpers", () => {
 		).toBe(false);
 		expect(
 			PI_SLASH_COMMAND_FALLBACK.some((command) =>
-				["clone", "tree", "fork"].includes(command.name),
+				["clone", "fork"].includes(command.name),
 			),
 		).toBe(false);
 		expect(isKnownPiBuiltin("compact")).toBe(true);
@@ -143,15 +144,18 @@ describe("pi slash command helpers", () => {
 		const onModel = vi.fn();
 		const onSettings = vi.fn();
 		const onResume = vi.fn();
-		const handlers = { onNew, onModel, onSettings, onResume };
+		const onTree = vi.fn();
+		const handlers = { onNew, onModel, onSettings, onResume, onTree };
 		expect(routePiCommandUiAction("new", handlers)).toBe("routed");
 		expect(routePiCommandUiAction("model", handlers)).toBe("routed");
+		expect(routePiCommandUiAction("tree", handlers)).toBe("routed");
 		expect(routePiCommandUiAction("settings", handlers)).toBe("routed");
 		expect(routePiCommandUiAction("resume", handlers)).toBe("routed");
 		expect(routePiCommandUiAction("fork", handlers)).toBe("guidance");
 		expect(routePiCommandUiAction(undefined, handlers)).toBe("none");
 		expect(onNew).toHaveBeenCalledOnce();
 		expect(onModel).toHaveBeenCalledOnce();
+		expect(onTree).toHaveBeenCalledOnce();
 		expect(onSettings).toHaveBeenCalledOnce();
 		expect(onResume).toHaveBeenCalledOnce();
 	});

@@ -229,6 +229,26 @@ function writeSession(project: string, file: string, content: string): string {
 }
 
 describe("activeBranch", () => {
+	it("projects a selected live leaf instead of the file tip, including the root", () => {
+		const entries = parsePiSessionFile(sampleSession());
+		expect(activeBranch(entries, "x1").map((entry) => entry.id)).toEqual([
+			"e1",
+			"e2",
+			"e3",
+			"x1",
+		]);
+		expect(activeBranch(entries, "e2").map((entry) => entry.id)).toEqual([
+			"e1",
+			"e2",
+		]);
+		expect(activeBranch(entries, null)).toEqual([]);
+		const path = writeSession("--work-repo--", "tree.jsonl", sampleSession());
+		expect(
+			files.readMessages(path, "x1").map((message) => message.content),
+		).toContain("ABANDONED");
+		expect(files.readMessages(path, null)).toEqual([]);
+	});
+
 	it("walks from the last entry to the root and skips abandoned branches", () => {
 		const entries = parsePiSessionFile(sampleSession());
 		const ids = activeBranch(entries).map((entry) => entry.id);

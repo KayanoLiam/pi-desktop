@@ -29,6 +29,12 @@ export type FakePiScenario = {
 	/** When set, `get_commands` fails so discovery fallback can be tested. */
 	commandsError?: string;
 	messages?: unknown[];
+	/** Session tree returned by get_tree; tree navigation changes its live leaf. */
+	tree?: unknown[];
+	treeLeafId?: string | null;
+	treeNavigationCancelled?: boolean;
+	/** Simulates a live Pi process whose Desktop gate extension failed to load. */
+	treeCommandMissing?: boolean;
 	lastAssistantText?: string | null;
 	compactResult?: Record<string, unknown>;
 	compactError?: string;
@@ -100,6 +106,15 @@ let streaming = false;
 let abortRequested = false;
 let uiWaiters = [];
 let sessionName;
+let treeLeafId = scenario.treeLeafId ?? null;
+const findTreeNode = (target, nodes) => {
+	for (const node of nodes) {
+		if (node.entry.id === target) return node;
+		const child = findTreeNode(target, node.children ?? []);
+		if (child) return child;
+	}
+	return null;
+};
 
 const substitute = (value, prompt) => {
 	if (typeof value === "string") return value.split("{{prompt}}").join(prompt);
@@ -168,6 +183,21 @@ async function handle(line) {
 			return;
 		}
 		case "prompt": {
+			if (command.message?.startsWith("/__pi_desktop_tree_jump ")) {
+				const target = command.message.slice("/__pi_desktop_tree_jump ".length);
+				const node = findTreeNode(target, scenario.tree ?? []);
+				if (!node || streaming) {
+					out({ id, type: "response", command: "prompt", success: false, error: "Tree entry not found or Pi is busy" });
+					return;
+				}
+				if (scenario.treeNavigationCancelled) {
+					out({ type: "extension_error", extensionPath: "command:__pi_desktop_tree_jump", event: "command", error: "Pi tree navigation was cancelled by an extension." });
+				} else {
+					treeLeafId = (node.entry.type === "custom_message" || (node.entry.type === "message" && node.entry.message?.role === "user")) ? node.entry.parentId : target;
+				}
+				out({ id, type: "response", command: "prompt", success: true });
+				return;
+			}
 			if (scenario.promptError) {
 				out({ id, type: "response", command: "prompt", success: false, error: scenario.promptError });
 				return;
@@ -240,7 +270,9 @@ async function handle(line) {
 				out({ id, type: "response", command: "get_commands", success: false, error: String(liveScenario.commandsError) });
 				return;
 			}
-			out({ id, type: "response", command: "get_commands", success: true, data: { commands: liveScenario.commands ?? scenario.commands ?? [] } });
+			const commands = [...(liveScenario.commands ?? scenario.commands ?? [])];
+			if (args.includes("--extension") && !scenario.treeCommandMissing) commands.push({ name: "__pi_desktop_tree_jump", source: "extension" });
+			out({ id, type: "response", command: "get_commands", success: true, data: { commands } });
 			return;
 		}
 		case "compact": {
@@ -301,6 +333,9 @@ async function handle(line) {
 		}
 		case "get_messages":
 			out({ id, type: "response", command: "get_messages", success: true, data: { messages: scenario.messages ?? [] } });
+			return;
+		case "get_tree":
+			out({ id, type: "response", command: "get_tree", success: true, data: { tree: scenario.tree ?? [], leafId: treeLeafId } });
 			return;
 		case "set_session_name":
 			sessionName = command.name;

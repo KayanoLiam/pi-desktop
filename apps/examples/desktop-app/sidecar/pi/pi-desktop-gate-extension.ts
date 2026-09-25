@@ -41,6 +41,20 @@ export default function piDesktopGate(pi) {
 		if (approved) return undefined;
 		return { block: true, reason: "Rejected in Pi Desktop" };
 	});
+
+	// RPC exposes get_tree but not navigate_tree. An extension command is the
+	// supported way to invoke Pi's session navigation without starting a turn.
+	pi.registerCommand("__pi_desktop_tree_jump", {
+		description: "Internal Pi Desktop session-tree navigation",
+		handler: async (targetId, ctx) => {
+			if (ctx.mode !== "rpc" || !targetId || !/^[a-zA-Z0-9_-]{1,128}$/.test(targetId)) {
+				throw new Error("Invalid Pi Desktop tree target");
+			}
+			if (!ctx.isIdle()) throw new Error("Pi is busy; wait before navigating the tree.");
+			const result = await ctx.navigateTree(targetId);
+			if (result.cancelled) throw new Error("Pi tree navigation was cancelled by an extension.");
+		},
+	});
 }
 `;
 

@@ -99,7 +99,10 @@ function readHeader(entries: FileEntry[]): SessionHeader | undefined {
  * Entries on the active branch: walk from the leaf (the last entry with an
  * id, exactly like Pi's `_buildIndex`) to the root through `parentId`.
  */
-export function activeBranch(entries: FileEntry[]): SessionEntry[] {
+export function activeBranch(
+	entries: FileEntry[],
+	leafId?: string | null,
+): SessionEntry[] {
 	const byId = new Map<string, SessionEntry>();
 	let leaf: SessionEntry | undefined;
 	for (const entry of entries) {
@@ -109,6 +112,10 @@ export function activeBranch(entries: FileEntry[]): SessionEntry[] {
 		byId.set(item.id, item);
 		leaf = item;
 	}
+	// A live /tree navigation changes Pi's in-memory leaf without writing a
+	// JSONL entry. Explicit null selects the root; undefined means the file tip.
+	if (leafId !== undefined)
+		leaf = leafId === null ? undefined : byId.get(leafId);
 	const path: SessionEntry[] = [];
 	const seen = new Set<string>();
 	let current = leaf;
@@ -330,11 +337,11 @@ export class PiSessionFiles {
 		this.byId.set(sessionId, path);
 	}
 
-	readMessages(path: string): PiChatMessage[] {
+	readMessages(path: string, leafId?: string | null): PiChatMessage[] {
 		const entries = parsePiSessionFile(readFileSync(path, "utf8"));
 		const header = readHeader(entries);
 		const sessionId = header?.id ?? "";
-		return projectPiSessionMessages(sessionId, activeBranch(entries));
+		return projectPiSessionMessages(sessionId, activeBranch(entries, leafId));
 	}
 
 	/** Append-only rename, the same entry Pi writes for `/name`. */

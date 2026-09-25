@@ -370,6 +370,43 @@ describe("Pi thread command routing", () => {
 		});
 	});
 
+	it("routes /tree to the picker and only exposes tree RPC for local Pi sessions", async () => {
+		const sessionId = "pi-tree-route";
+		writePiSession(sessionId, dir);
+		expect(
+			await handleCommand(ctx, "execute_pi_command", {
+				text: "/tree",
+				sessionId,
+			}),
+		).toMatchObject({
+			handled: true,
+			uiAction: "tree",
+		});
+		expect(await handleCommand(ctx, "get_pi_tree", { sessionId })).toEqual({
+			tree: [],
+			leafId: null,
+		});
+		await expect(
+			handleCommand(ctx, "navigate_pi_tree", {
+				sessionId,
+				targetId: "missing",
+			}),
+		).rejects.toThrow(/no longer exists/);
+		await expect(
+			handleCommand(ctx, "get_pi_tree", { sessionId: "not-pi" }),
+		).rejects.toThrow(/local Pi session/);
+		await expect(
+			handleCommand(ctx, "navigate_pi_tree", {
+				sessionId,
+				targetId: "b",
+				environmentId: "remote",
+			}),
+		).rejects.toThrow(/local Pi session/);
+		expect(fake.received().filter((entry) => entry.type === "prompt")).toEqual(
+			[],
+		);
+	});
+
 	it("executes Pi builtins through execute_pi_command and keeps the send path closed", async () => {
 		expect(
 			await handleCommand(ctx, "execute_pi_command", { text: "/review" }),

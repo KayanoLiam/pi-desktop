@@ -102,6 +102,32 @@ type ActiveRun = {
 	done: Promise<RunResult>;
 };
 
+type PiTreeNode = {
+	entry: {
+		id: string;
+		parentId: string | null;
+		type: string;
+		message?: { role?: string; content?: unknown };
+		content?: unknown;
+		timestamp?: string;
+	};
+	children: PiTreeNode[];
+	label?: string;
+};
+
+function findPiTreeNode(
+	tree: PiTreeNode[],
+	id: string,
+): PiTreeNode | undefined {
+	const pending = [...tree];
+	while (pending.length) {
+		const node = pending.pop();
+		if (node?.entry.id === id) return node;
+		if (node) pending.push(...node.children);
+	}
+	return undefined;
+}
+
 type PiLiveSession = {
 	sessionId: string;
 	process: PiRpcProcess;
@@ -112,6 +138,9 @@ type PiLiveSession = {
 	model?: string;
 	thinkingLevel?: string;
 	busy: boolean;
+	/** Tree navigation changes Pi's in-memory leaf before the next file append. */
+	treeLeafId?: string | null;
+	navigating: boolean;
 	/** Manual `/compact` is in flight. Distinct from a model turn so send cannot queue over it. */
 	compacting: boolean;
 	stale: boolean;
@@ -147,6 +176,7 @@ const DISCOVERY_TIMEOUT_MS = 30_000;
 /** Summarization can outlive the 30s RPC default. A finite timeout still fails closed. */
 const DEFAULT_COMPACT_TIMEOUT_MS = 5 * 60_000;
 const IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i;
+const PI_TREE_JUMP_COMMAND = "/__pi_desktop_tree_jump";
 
 export function getPiSessionManager(ctx: SidecarContext): PiSessionManager {
 	const owner = getOwnerContext(ctx);
@@ -239,7 +269,10 @@ export class PiSessionManager {
 		const summary = this.files.findById(sessionId);
 		if (!summary) return undefined;
 		try {
-			return this.files.readMessages(summary.path);
+			return this.files.readMessages(
+				summary.path,
+				this.live.get(sessionId)?.treeLeafId,
+			);
 		} catch {
 			return [];
 		}
@@ -334,6 +367,9 @@ export class PiSessionManager {
 		if (!prompt && userImages.length === 0 && userFiles.length === 0) {
 			throw new Error("prompt or attachment is required");
 		}
+		if (prompt.split(/\s+/, 1)[0] === PI_TREE_JUMP_COMMAND) {
+			throw new Error("Use /tree to navigate Pi sessions.");
+		}
 		// Known builtins never become a model turn. Interactive Pi runs them
 		// before extension/template expansion, so a colliding extension must not
 		// win by falling through to RPC `prompt`.
@@ -363,6 +399,8 @@ export class PiSessionManager {
 			live.config = { ...live.config, ...request.config };
 			if (!live.busy) await this.applyModelSelection(live);
 		}
+		if (live.navigating)
+			throw new Error("Wait for Pi tree navigation to finish.");
 		if (live.compacting) {
 			throw new Error(
 				"Pi is compacting this session. Wait for compaction to finish, then retry.",
@@ -461,6 +499,9 @@ export class PiSessionManager {
 			};
 		}
 		const result = await run.done;
+		// Keep projecting the selected branch while Pi is streaming. The file may
+		// still end at an abandoned sibling until Pi persists the new assistant turn.
+		if (result.finishReason === "completed") live.treeLeafId = undefined;
 		deleteMaterializedAttachments(sessionId, materialized);
 		this.ctx.logger?.log("Pi prompt completed", {
 			sessionId,
@@ -592,6 +633,124 @@ export class PiSessionManager {
 		return hits;
 	}
 
+	/** Read the complete tree from the active Pi process, including its unsaved leaf. */
+	async getTree(sessionId: string): Promise<{
+		tree: PiTreeNode[];
+		leafId: string | null;
+	}> {
+		const live = await this.ensureLiveSession(sessionId);
+		const response = await live.process.request<{
+			tree: PiTreeNode[];
+			leafId: string | null;
+		}>({ type: "get_tree" });
+		if (!response.success)
+			throw new Error(response.error || "Could not read Pi tree");
+		return {
+			tree: response.data?.tree ?? [],
+			leafId: response.data?.leafId ?? null,
+		};
+	}
+
+	/** Navigate through Pi's extension API; no prompt reaches an LLM. */
+	async navigateTree(
+		sessionId: string,
+		targetId: string,
+	): Promise<{
+		leafId: string | null;
+		editorText?: string;
+		messages: PiChatMessage[];
+	}> {
+		const live = await this.ensureLiveSession(sessionId);
+		this.assertIdle(live, "tree");
+		if (!/^[a-zA-Z0-9_-]{1,128}$/.test(targetId))
+			throw new Error("Invalid Pi tree entry ID.");
+		live.navigating = true;
+		try {
+			const before = await this.getTree(sessionId);
+			const node = findPiTreeNode(before.tree, targetId);
+			if (!node) throw new Error("Tree entry no longer exists. Reopen /tree.");
+			if (before.leafId === targetId) {
+				live.treeLeafId = before.leafId;
+				return {
+					leafId: before.leafId,
+					messages: this.readMessages(sessionId) ?? [],
+				};
+			}
+			const message = node.entry.message;
+			const reedit =
+				(node.entry.type === "message" && message?.role === "user") ||
+				node.entry.type === "custom_message";
+			const expectedLeaf = reedit ? node.entry.parentId : targetId;
+			let editorText: string | undefined;
+			if (reedit) {
+				const content =
+					node.entry.type === "message" ? message?.content : node.entry.content;
+				editorText =
+					typeof content === "string"
+						? content
+						: Array.isArray(content)
+							? content
+									.filter((block) => block?.type === "text")
+									.map((block) => block.text ?? "")
+									.join("")
+							: "";
+			}
+			// Pi treats an unknown slash command as a model prompt. Fail closed if
+			// the gate extension did not register in this running Pi process.
+			const commands = await live.process.request<{
+				commands?: Array<{ name?: string; source?: string }>;
+			}>({ type: "get_commands" });
+			if (
+				!commands.success ||
+				!commands.data?.commands?.some(
+					(command) =>
+						command.name === PI_TREE_JUMP_COMMAND.slice(1) &&
+						command.source === "extension",
+				)
+			) {
+				throw new Error(
+					"Pi Desktop tree navigation is unavailable. Restart the Pi session and try again.",
+				);
+			}
+			let commandError: string | undefined;
+			const unsubscribe = live.process.onEvent((event) => {
+				if (
+					event.type === "extension_error" &&
+					event.extensionPath === "command:__pi_desktop_tree_jump"
+				)
+					commandError = String(event.error ?? "Pi tree navigation failed");
+			});
+			try {
+				const response = await live.process.request({
+					type: "prompt",
+					message: `${PI_TREE_JUMP_COMMAND} ${targetId}`,
+				});
+				if (!response.success)
+					throw new Error(response.error || "Pi tree navigation failed");
+				if (commandError) throw new Error(commandError);
+			} finally {
+				unsubscribe();
+			}
+			if (this.live.get(sessionId) !== live)
+				throw new Error("Pi session changed during tree navigation.");
+			const after = await this.getTree(sessionId);
+			if (after.leafId !== expectedLeaf) {
+				throw new Error(
+					"Pi did not switch to the selected branch. Reopen /tree.",
+				);
+			}
+			live.treeLeafId = after.leafId;
+			live.lastActivityAt = Date.now();
+			return {
+				leafId: after.leafId,
+				...(editorText !== undefined ? { editorText } : {}),
+				messages: this.readMessages(sessionId) ?? [],
+			};
+		} finally {
+			live.navigating = false;
+		}
+	}
+
 	// ── Slash commands from Pi ─────────────────────────────────────────────
 
 	async listCommands(workspaceRoot: string): Promise<PiSlashCommand[]> {
@@ -624,7 +783,11 @@ export class PiSessionManager {
 		// Builtins stay listed when discovery fails, and they replace a colliding
 		// extension/template/skill because interactive Pi does the same.
 		// A failed discovery is not cached, so the next menu open can retry.
-		const commands = mergeBuiltinCommands(discovered);
+		const commands = mergeBuiltinCommands(
+			discovered.filter(
+				(command) => `/${command.name}` !== PI_TREE_JUMP_COMMAND,
+			),
+		);
 		if (!discoveryFailed) {
 			this.commandsCache.set(key, { at: Date.now(), commands });
 		}
@@ -642,6 +805,9 @@ export class PiSessionManager {
 	}): Promise<ExecutePiCommandResult> {
 		const text = input.text?.trim() ?? "";
 		if (!text) throw new Error("text is required");
+		if (text.split(/\s+/, 1)[0] === PI_TREE_JUMP_COMMAND) {
+			throw new Error("Use /tree to navigate Pi sessions.");
+		}
 		const name = piBuiltinCommandName(text);
 		if (!name) return { handled: false };
 		if (name === "model" && piCommandRemainder(text, name)) {
@@ -1006,7 +1172,7 @@ export class PiSessionManager {
 	}
 
 	private assertIdle(live: PiLiveSession, command: string): void {
-		if (live.compacting || live.busy || live.run) {
+		if (live.compacting || live.busy || live.run || live.navigating) {
 			throw new Error(
 				`Pi is busy. Wait until the session is idle, then retry /${command}.`,
 			);
@@ -1328,6 +1494,7 @@ export class PiSessionManager {
 			sessionFile: resume?.path,
 			config,
 			busy: false,
+			navigating: false,
 			compacting: false,
 			stale: false,
 			lastActivityAt: Date.now(),
@@ -2043,7 +2210,8 @@ export class PiSessionManager {
 		const ttl = this.options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
 		const now = Date.now();
 		for (const live of this.live.values()) {
-			if (live.busy || live.run || live.pendingUi.size > 0) continue;
+			if (live.busy || live.run || live.navigating || live.pendingUi.size > 0)
+				continue;
 			if (now - live.lastActivityAt >= ttl) {
 				await this.terminate(live.sessionId, "Idle");
 			}

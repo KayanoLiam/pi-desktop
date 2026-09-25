@@ -4,8 +4,7 @@
  * Installed Pi 0.87.0 (`@earendil-works/pi-coding-agent`) matches builtin
  * slash commands in the interactive submit handler before extension commands,
  * and hides colliding extension names from autocomplete. This module follows
- * that precedence. It does not invent desktop implementations for commands
- * that only have a TUI picker.
+ * that precedence and routes supported pickers through native Desktop controls.
  */
 
 export const PI_SESSION_REFRESH_EVENT = "cline:pi-session-refresh";
@@ -14,6 +13,7 @@ export const PI_COMMAND_UI_ACTIONS = [
 	"new",
 	"model",
 	"scoped-models",
+	"tree",
 	"thinking",
 	"settings",
 	"resume",
@@ -71,8 +71,8 @@ const KNOWN_PI_BUILTIN_NAMES = new Set<string>(KNOWN_PI_BUILTIN_COMMANDS);
 /**
  * Discoverability fallback when `list_pi_commands` fails. Only commands the
  * desktop can actually run or route to an existing control. Unsupported
- * builtins such as clone/tree stay out of this list; they appear only if
- * discovery returns them, and execution then shows guidance.
+ * builtins such as clone stay out of this list; they appear only if discovery
+ * returns them, and execution then shows guidance.
  */
 export const PI_SLASH_COMMAND_FALLBACK: PiSlashCommandRow[] = [
 	{ name: "compact", description: "Manually compact conversation context" },
@@ -80,6 +80,7 @@ export const PI_SLASH_COMMAND_FALLBACK: PiSlashCommandRow[] = [
 	{ name: "new", description: "Start a new session" },
 	{ name: "model", description: "Open the model picker" },
 	{ name: "scoped-models", description: "Configure Pi model cycling" },
+	{ name: "tree", description: "Browse the Pi session tree" },
 	{ name: "thinking", description: "Set a Pi thinking level" },
 	{ name: "settings", description: "Open desktop settings" },
 	{ name: "resume", description: "Search and open a previous session" },
@@ -282,6 +283,7 @@ export function routePiCommandUiAction(
 		onNew?: () => void;
 		onModel?: () => void;
 		onScopedModels?: () => void;
+		onTree?: () => void;
 		onThinking?: () => void;
 		onSettings?: () => void;
 		onResume?: () => void;
@@ -296,11 +298,13 @@ export function routePiCommandUiAction(
 				? handlers.onModel
 				: action === "scoped-models"
 					? handlers.onScopedModels
-					: action === "thinking"
-						? handlers.onThinking
-						: action === "settings"
-							? handlers.onSettings
-							: handlers.onResume;
+					: action === "tree"
+						? handlers.onTree
+						: action === "thinking"
+							? handlers.onThinking
+							: action === "settings"
+								? handlers.onSettings
+								: handlers.onResume;
 	if (!handler) return "guidance";
 	handler();
 	return "routed";

@@ -27,6 +27,7 @@ export type PiCommandUiAction =
 	| "new"
 	| "model"
 	| "scoped-models"
+	| "tree"
 	| "thinking"
 	| "settings"
 	| "resume"

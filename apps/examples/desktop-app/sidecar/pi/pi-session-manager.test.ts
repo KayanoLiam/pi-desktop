@@ -94,6 +94,254 @@ afterEach(async () => {
 });
 
 describe("PiSessionManager", () => {
+	it("navigates Pi's live tree, projects the selected branch, and restores user text", async () => {
+		const sessionId = "tree-session";
+		const project = join(agentDir, "sessions", "--tree--");
+		mkdirSync(project, { recursive: true });
+		writeFileSync(
+			join(project, `${sessionId}.jsonl`),
+			`${[
+				{
+					type: "session",
+					version: 3,
+					id: sessionId,
+					cwd: dir,
+					timestamp: "2026-09-01T00:00:00.000Z",
+				},
+				{
+					type: "message",
+					id: "a",
+					parentId: null,
+					timestamp: "2026-09-01T00:00:01.000Z",
+					message: { role: "user", content: "Original question", timestamp: 1 },
+				},
+				{
+					type: "message",
+					id: "b",
+					parentId: "a",
+					timestamp: "2026-09-01T00:00:02.000Z",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "First answer" }],
+						timestamp: 2,
+					},
+				},
+				{
+					type: "message",
+					id: "c",
+					parentId: "a",
+					timestamp: "2026-09-01T00:00:03.000Z",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Second answer" }],
+						timestamp: 3,
+					},
+				},
+			]
+				.map((line) => JSON.stringify(line))
+				.join("\n")}\n`,
+		);
+		const tree = [
+			{
+				entry: {
+					id: "a",
+					parentId: null,
+					type: "message",
+					message: {
+						role: "user",
+						content: [
+							{ type: "text", text: "Original " },
+							{ type: "text", text: "question" },
+						],
+					},
+				},
+				children: [
+					{
+						entry: {
+							id: "b",
+							parentId: "a",
+							type: "message",
+							message: { role: "assistant" },
+						},
+						children: [],
+					},
+					{
+						entry: {
+							id: "c",
+							parentId: "a",
+							type: "message",
+							message: { role: "assistant" },
+						},
+						children: [],
+					},
+				],
+			},
+		];
+		createManager({ tree, treeLeafId: "c" });
+		expect(await manager.getTree(sessionId)).toMatchObject({
+			leafId: "c",
+			tree,
+		});
+		expect(manager.readMessages(sessionId)?.at(-1)?.content).toBe(
+			"Second answer",
+		);
+		const first = await manager.navigateTree(sessionId, "b");
+		expect(first).toMatchObject({ leafId: "b" });
+		expect(first.messages.at(-1)?.content).toBe("First answer");
+		expect(manager.readMessages(sessionId)?.at(-1)?.content).toBe(
+			"First answer",
+		);
+		const reedit = await manager.navigateTree(sessionId, "a");
+		expect(reedit).toMatchObject({
+			leafId: null,
+			editorText: "Original question",
+			messages: [],
+		});
+		expect(manager.readMessages(sessionId)).toEqual([]);
+		await expect(manager.navigateTree(sessionId, "missing")).rejects.toThrow(
+			/no longer exists/,
+		);
+		expect(
+			fake.received().filter((line) => line.type === "prompt"),
+		).toHaveLength(2);
+	});
+
+	it("never sends a tree jump as a model prompt when the gate extension is missing", async () => {
+		createManager({
+			tree: [
+				{
+					entry: { id: "a", parentId: null, type: "model_change" },
+					children: [
+						{
+							entry: { id: "b", parentId: "a", type: "model_change" },
+							children: [],
+						},
+					],
+				},
+			],
+			treeLeafId: "b",
+			treeCommandMissing: true,
+		});
+		await startPi(manager, "missing-tree-gate");
+		await expect(
+			manager.navigateTree("missing-tree-gate", "a"),
+		).rejects.toThrow(/tree navigation is unavailable/);
+		expect((await manager.getTree("missing-tree-gate")).leafId).toBe("b");
+		expect(
+			fake.received().filter((line) => line.type === "prompt"),
+		).toHaveLength(0);
+	});
+
+	it("rejects a cancelled tree switch instead of claiming success", async () => {
+		createManager({
+			tree: [
+				{
+					entry: { id: "a", parentId: null, type: "model_change" },
+					children: [
+						{
+							entry: { id: "b", parentId: "a", type: "model_change" },
+							children: [],
+						},
+					],
+				},
+			],
+			treeLeafId: "b",
+			treeNavigationCancelled: true,
+		});
+		await startPi(manager, "cancelled-tree");
+		await expect(manager.navigateTree("cancelled-tree", "a")).rejects.toThrow(
+			/cancelled/,
+		);
+		expect((await manager.getTree("cancelled-tree")).leafId).toBe("b");
+	});
+
+	it("rejects tree navigation while a Pi turn is active", async () => {
+		createManager({
+			tree: [
+				{
+					entry: { id: "a", parentId: null, type: "model_change" },
+					children: [
+						{
+							entry: { id: "b", parentId: "a", type: "model_change" },
+							children: [],
+						},
+					],
+				},
+			],
+			treeLeafId: "b",
+			promptEvents: [{ __waitForUi__: true }],
+		});
+		await startPi(manager, "busy-tree");
+		const pending = manager.handle({
+			action: "send",
+			sessionId: "busy-tree",
+			prompt: "hello",
+		});
+		await waitFor(() => manager.status("busy-tree") === "running");
+		expect((await manager.getTree("busy-tree")).leafId).toBe("b");
+		await expect(manager.navigateTree("busy-tree", "a")).rejects.toThrow(
+			/busy/i,
+		);
+		expect(
+			fake.received().filter((line) => line.type === "prompt"),
+		).toHaveLength(1);
+		await manager.handle({ action: "abort", sessionId: "busy-tree" });
+		await pending;
+	});
+
+	it("does not re-edit a user node when its leaf is already selected", async () => {
+		createManager({
+			tree: [
+				{
+					entry: {
+						id: "a",
+						parentId: null,
+						type: "message",
+						message: { role: "user", content: "hello" },
+					},
+					children: [],
+				},
+			],
+			treeLeafId: "a",
+		});
+		await startPi(manager, "same-tree");
+		expect(await manager.navigateTree("same-tree", "a")).toMatchObject({
+			leafId: "a",
+			messages: [],
+		});
+		expect(
+			fake.received().filter((line) => line.type === "prompt"),
+		).toHaveLength(0);
+	});
+
+	it("keeps the internal tree command out of discovery and user prompts", async () => {
+		createManager({
+			commands: [{ name: "__pi_desktop_tree_jump", source: "extension" }],
+		});
+		expect(
+			(await manager.listCommands(dir)).some(
+				(command) => command.name === "__pi_desktop_tree_jump",
+			),
+		).toBe(false);
+		await startPi(manager, "reserved-tree");
+		await expect(
+			manager.executeCommand({
+				sessionId: "reserved-tree",
+				text: "/__pi_desktop_tree_jump a",
+			}),
+		).rejects.toThrow(/Use \/tree/);
+		await expect(
+			manager.handle({
+				action: "send",
+				sessionId: "reserved-tree",
+				prompt: "/__pi_desktop_tree_jump a",
+			}),
+		).rejects.toThrow(/Use \/tree/);
+		expect(
+			fake.received().filter((line) => line.type === "prompt"),
+		).toHaveLength(0);
+	});
+
 	it("starts a new session with the selected model and streams a full turn", async () => {
 		createManager({ promptEvents: textAndToolScenarioEvents() });
 		const started = (await manager.handle({

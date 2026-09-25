@@ -1180,6 +1180,28 @@ export function useChatSession(environmentId: string) {
 		[environmentId, sessionDiffCwd],
 	);
 
+	/** Replace the visible transcript with Pi's selected live tree branch. */
+	const applyPiTreeNavigation = useCallback(
+		(sid: string, historyMessages: ChatMessage[]) => {
+			if (activeSessionIdRef.current !== sid) return;
+			setError(null);
+			setPiCommandNotice(null);
+			setRawTranscript("");
+			setActiveAssistantMessageId(null);
+			activeAssistantMessageIdRef.current = null;
+			applyCanonicalHistory(sid, historyMessages);
+			void refreshSessionDiffSummary(sid);
+			if (typeof window !== "undefined") {
+				window.dispatchEvent(
+					new CustomEvent(PI_SESSION_REFRESH_EVENT, {
+						detail: { sessionId: sid, environmentId },
+					}),
+				);
+			}
+		},
+		[applyCanonicalHistory, environmentId, refreshSessionDiffSummary],
+	);
+
 	// ---- Message helpers ----
 
 	const addMessage = useCallback((message: ChatMessage) => {
@@ -4382,6 +4404,7 @@ export function useChatSession(environmentId: string) {
 		setWorkspacePath,
 		start,
 		hydrateSession,
+		applyPiTreeNavigation,
 		sendPrompt,
 		steerPromptInQueue,
 		updatePromptInQueue,

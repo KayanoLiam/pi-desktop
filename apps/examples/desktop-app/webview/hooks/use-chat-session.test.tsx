@@ -7117,6 +7117,37 @@ describe("useChatSession Pi slash commands", () => {
 		});
 	}
 
+	it("replaces the visible Pi transcript with the selected live tree branch", async () => {
+		await hydratePi();
+		const refreshed = vi.fn();
+		window.addEventListener("cline:pi-session-refresh", refreshed);
+		const selected = [
+			{
+				id: "branch-user",
+				sessionId: "ses-pi",
+				role: "user" as const,
+				content: "Different question",
+				createdAt: 3,
+			},
+			{
+				id: "branch-assistant",
+				sessionId: "ses-pi",
+				role: "assistant" as const,
+				content: "Different answer",
+				createdAt: 4,
+			},
+		];
+		await act(async () => current.applyPiTreeNavigation("ses-pi", selected));
+		expect(current.messages.map((message) => message.content)).toEqual([
+			"Different question",
+			"Different answer",
+		]);
+		expect(refreshed).toHaveBeenCalledOnce();
+		await act(async () => current.applyPiTreeNavigation("other-session", []));
+		expect(current.messages).toHaveLength(2);
+		window.removeEventListener("cline:pi-session-refresh", refreshed);
+	});
+
 	it("runs /compact before any optimistic send and refreshes the transcript", async () => {
 		await hydratePi();
 		const onPiCommand = vi.fn();

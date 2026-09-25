@@ -2390,6 +2390,21 @@ export async function handleCommand(
 			save: args?.save === true,
 		});
 	}
+	if (command === "get_pi_tree" || command === "navigate_pi_tree") {
+		const sessionId =
+			typeof args?.sessionId === "string" ? args.sessionId.trim() : "";
+		if (
+			!sessionId ||
+			(requestedEnvironmentId(args) &&
+				requestedEnvironmentId(args) !== LOCAL_ENVIRONMENT_ID) ||
+			!isPiSessionCommand(ctx, sessionId, args)
+		) {
+			throw new Error("Tree navigation requires an active local Pi session.");
+		}
+		const manager = getPiSessionManager(ctx);
+		if (command === "get_pi_tree") return manager.getTree(sessionId);
+		return manager.navigateTree(sessionId, String(args?.targetId ?? ""));
+	}
 	if (command === "execute_pi_command") {
 		const text = typeof args?.text === "string" ? args.text : "";
 		if (!text.trim()) throw new Error("text is required");

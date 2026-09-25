@@ -468,6 +468,15 @@ describe("ChatInputBar", () => {
 		});
 		expect(container.textContent).toContain("/review");
 		expect(container.textContent).toContain("Review code · Extension command");
+		// The unfiltered menu shows only ten commands; narrow the query to see skills.
+		await act(async () => {
+			const setValue = Object.getOwnPropertyDescriptor(
+				HTMLTextAreaElement.prototype,
+				"value",
+			)?.set;
+			setValue?.call(textarea, "/skill");
+			textarea?.dispatchEvent(new Event("input", { bubbles: true }));
+		});
 		expect(container.textContent).toContain("/skill:brave");
 		expect(container.textContent).not.toContain("/team");
 	});
@@ -3184,7 +3193,7 @@ describe("ChatInputBar Pi slash submit", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
-	it("shows builtin fallbacks without argument placeholders or speculative clone/tree", async () => {
+	it("shows builtin fallbacks without argument placeholders or speculative clone", async () => {
 		invokeMock.mockImplementation(async (command: string) => {
 			if (command === "list_pi_commands") throw new Error("discovery failed");
 			if (command === "list_pi_model_catalog") return { providers: [] };
@@ -3209,7 +3218,7 @@ describe("ChatInputBar Pi slash submit", () => {
 		expect(container.textContent).toContain("/name");
 		expect(container.textContent).not.toContain("name <name>");
 		expect(container.textContent).not.toContain("/clone");
-		expect(container.textContent).not.toContain("/tree");
+		expect(container.textContent).toContain("/tree");
 	});
 
 	it("keeps a colliding extension from replacing the builtin compact row", async () => {

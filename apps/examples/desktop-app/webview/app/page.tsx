@@ -41,6 +41,7 @@ import {
 	type PiModelScope,
 	PiScopedModelsDialog,
 } from "@/components/views/chat/pi-scoped-models-dialog";
+import { PiTreeDialog } from "@/components/views/chat/pi-tree-dialog";
 import { RemoteDirectoryPicker } from "@/components/views/chat/remote-directory-picker";
 import { WelcomeScreen } from "@/components/views/chat/welcome-chat";
 import type { SettingsSection } from "@/components/views/settings/sections";
@@ -95,6 +96,7 @@ import {
 	routePiCommandUiAction,
 	shouldDeferComposerSideEffects,
 } from "@/lib/pi-slash-command";
+import type { PiTreeRow } from "@/lib/pi-tree";
 import { requestPromptInputFocus } from "@/lib/prompt-input-focus";
 import {
 	fetchProviderCatalog,
@@ -1037,6 +1039,7 @@ function ChatThreadPane({
 		reset,
 		abort,
 		hydrateSession,
+		applyPiTreeNavigation,
 	} = useChatSession(environmentId);
 	// The live composer text lives inside ChatInputBar so typing does not
 	// re-render this whole pane. The pane mirrors it in a ref (for reads) and
@@ -1787,12 +1790,14 @@ function ChatThreadPane({
 	const [modelPickerRequest, setModelPickerRequest] = useState(0);
 	const [thinkingPickerRequest, setThinkingPickerRequest] = useState(0);
 	const [scopedModelsOpen, setScopedModelsOpen] = useState(false);
+	const [piTreeOpen, setPiTreeOpen] = useState(false);
 	const routePiUiAction = useCallback(
 		(action: PiCommandHandled["uiAction"]) => {
 			routePiCommandUiAction(action, {
 				onNew: onNewThread,
 				onModel: () => setModelPickerRequest((current) => current + 1),
 				onScopedModels: () => setScopedModelsOpen(true),
+				onTree: () => setPiTreeOpen(true),
 				onThinking: () => setThinkingPickerRequest((current) => current + 1),
 				onSettings: onOpenSettings,
 				onResume: onOpenSessionSearch,
@@ -2617,6 +2622,37 @@ function ChatThreadPane({
 				open={scopedModelsOpen}
 				sessionId={sessionId ?? undefined}
 				workspaceRoot={config.workspaceRoot || config.cwd}
+			/>
+			<PiTreeDialog
+				onBeforeNavigate={(row: PiTreeRow) => {
+					if (!row.reedit) return true;
+					const warnings = [];
+					if (promptInputRef.current.trim() || pendingAttachments.length > 0) {
+						warnings.push(
+							"Your current draft and attachments will be replaced.",
+						);
+					}
+					if (row.hasImages) {
+						warnings.push(
+							"Images from the original message cannot be restored.",
+						);
+					}
+					return (
+						warnings.length === 0 ||
+						window.confirm(`${warnings.join(" ")} Continue?`)
+					);
+				}}
+				onNavigated={(id, result) => {
+					if (id !== sessionId) return;
+					applyPiTreeNavigation(id, result.messages);
+					if (result.editorText !== undefined) {
+						setPendingAttachments([]);
+						setPromptInput(result.editorText);
+					}
+				}}
+				onOpenChange={setPiTreeOpen}
+				open={piTreeOpen}
+				sessionId={sessionId ?? undefined}
 			/>
 		</WorkspaceProvider>
 	);
