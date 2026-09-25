@@ -75,6 +75,8 @@ export type ChatSessionCommandRequest = {
 	promptId?: string;
 	checkpointRunCount?: number;
 	forkBeforeRunCount?: number;
+	/** Transcript id of the edited message; Pi threads use it as the fork entry id. */
+	forkMessageId?: string;
 	delivery?: "queue" | "steer";
 	config?: JsonRecord;
 	attachments?: ChatTurnAttachments;

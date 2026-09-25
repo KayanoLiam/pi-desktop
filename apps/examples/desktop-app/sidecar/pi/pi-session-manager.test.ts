@@ -120,6 +120,132 @@ function slowTurnEvents(
 	];
 }
 
+const FORK_ENTRIES = [
+	{
+		type: "message",
+		id: "a",
+		parentId: null,
+		timestamp: "2026-09-01T00:00:01.000Z",
+		message: { role: "user", content: "Question one", timestamp: 1 },
+	},
+	{
+		type: "message",
+		id: "b",
+		parentId: "a",
+		timestamp: "2026-09-01T00:00:02.000Z",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text: "Answer one" }],
+			timestamp: 2,
+		},
+	},
+	{
+		type: "message",
+		id: "c",
+		parentId: "b",
+		timestamp: "2026-09-01T00:00:03.000Z",
+		message: { role: "user", content: "Question two", timestamp: 3 },
+	},
+	{
+		type: "message",
+		id: "d",
+		parentId: "c",
+		timestamp: "2026-09-01T00:00:04.000Z",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text: "Answer two" }],
+			timestamp: 4,
+		},
+	},
+];
+
+/** Pi's live tree for FORK_ENTRIES plus a second branch (e, f) off "b". */
+const FORK_TREE = [
+	{
+		entry: {
+			id: "a",
+			parentId: null,
+			type: "message",
+			message: { role: "user", content: "Question one" },
+		},
+		children: [
+			{
+				entry: {
+					id: "b",
+					parentId: "a",
+					type: "message",
+					message: { role: "assistant" },
+				},
+				children: [
+					{
+						entry: {
+							id: "c",
+							parentId: "b",
+							type: "message",
+							message: { role: "user", content: "Question two" },
+						},
+						children: [
+							{
+								entry: {
+									id: "d",
+									parentId: "c",
+									type: "message",
+									message: { role: "assistant" },
+								},
+								children: [],
+							},
+						],
+					},
+					{
+						entry: {
+							id: "e",
+							parentId: "b",
+							type: "message",
+							message: {
+								role: "user",
+								content: [{ type: "text", text: "Question two, again" }],
+							},
+						},
+						children: [
+							{
+								entry: {
+									id: "f",
+									parentId: "e",
+									type: "message",
+									message: { role: "assistant" },
+								},
+								children: [],
+							},
+						],
+					},
+				],
+			},
+		],
+	},
+];
+
+function writeForkSession(sessionId: string): string {
+	const project = join(agentDir, "sessions", "--fork--");
+	mkdirSync(project, { recursive: true });
+	const path = join(project, `${sessionId}.jsonl`);
+	const header = {
+		type: "session",
+		version: 3,
+		id: sessionId,
+		cwd: dir,
+		timestamp: "2026-09-01T00:00:00.000Z",
+	};
+	writeFileSync(
+		path,
+		`${[header, ...FORK_ENTRIES].map((line) => JSON.stringify(line)).join("\n")}\n`,
+	);
+	return path;
+}
+
+function launches(): Array<Record<string, unknown>> {
+	return fake.received().filter((line) => Array.isArray(line.argv));
+}
+
 function createManager(
 	scenario: Parameters<typeof createFakePi>[1] = {},
 	options: { compactTimeoutMs?: number } = {},
@@ -1011,6 +1137,161 @@ describe("PiSessionManager", () => {
 			readdirSync(join(dir, "session-data", "s-exit", "user-attachments")),
 		).toEqual([]);
 		expect(manager.isLive("s-exit")).toBe(false);
+	});
+
+	it("forks before an edited message into a new Pi session and moves the live process", async () => {
+		const path = writeForkSession("fork-src");
+		createManager({
+			tree: FORK_TREE,
+			treeLeafId: "d",
+			forkFileEntries: FORK_ENTRIES.slice(0, 2),
+		});
+		const result = await manager.handle({
+			action: "fork",
+			sessionId: "fork-src",
+			forkBeforeRunCount: 2,
+			forkMessageId: "c",
+		});
+		expect(fake.received().find((line) => line.type === "fork")).toMatchObject({
+			entryId: "c",
+		});
+		expect(result).toMatchObject({
+			sessionId: "fork-1",
+			forkedFromSessionId: "fork-src",
+			messages: [
+				{ role: "user", content: "Question one" },
+				{ role: "assistant", content: "Answer one" },
+			],
+		});
+		expect(manager.isLive("fork-1")).toBe(true);
+		expect(manager.isLive("fork-src")).toBe(false);
+		expect(manager.owns("fork-src")).toBe(true);
+		// The original thread relaunches from its own file on the next send.
+		await manager.handle({
+			action: "send",
+			sessionId: "fork-src",
+			prompt: "still here",
+		});
+		expect(launches().at(-1)?.argv).toEqual(
+			expect.arrayContaining(["--session", path]),
+		);
+	});
+
+	it("finds a just-sent message by its turn on the current branch", async () => {
+		writeForkSession("fork-branch");
+		// Pi's leaf is on the second branch (as after /tree), and the webview
+		// only has an optimistic id for the message it just sent.
+		createManager({ tree: FORK_TREE, treeLeafId: "f" });
+		await manager.handle({
+			action: "fork",
+			sessionId: "fork-branch",
+			forkBeforeRunCount: 2,
+			forkMessageId: "user_optimistic_1",
+		});
+		expect(fake.received().find((line) => line.type === "fork")).toMatchObject({
+			entryId: "e",
+		});
+		await expect(
+			manager.handle({
+				action: "fork",
+				sessionId: "fork-1",
+				forkBeforeRunCount: 5,
+			}),
+		).rejects.toThrow(/not on the current Pi branch/);
+	});
+
+	it("keeps a fork of the first message usable before Pi writes its file", async () => {
+		writeForkSession("fork-first");
+		createManager({ tree: FORK_TREE, treeLeafId: "d" });
+		const result = await manager.handle({
+			action: "fork",
+			sessionId: "fork-first",
+			forkBeforeRunCount: 1,
+			forkMessageId: "a",
+		});
+		expect(result).toMatchObject({ sessionId: "fork-1", messages: [] });
+		await manager.handle({ action: "stop", sessionId: "fork-1" });
+		expect(manager.owns("fork-1")).toBe(true);
+		expect(
+			await manager.handle({ action: "attach", sessionId: "fork-1" }),
+		).toMatchObject({ sessionId: "fork-1", status: "idle" });
+		await manager.handle({
+			action: "send",
+			sessionId: "fork-1",
+			prompt: "a better first question",
+		});
+		expect(launches().at(-1)?.argv).toEqual(
+			expect.arrayContaining(["--session-id", "fork-1"]),
+		);
+	});
+
+	it("copies the whole session with Pi's clone, but never while Pi is busy", async () => {
+		writeForkSession("fork-copy");
+		createManager({
+			tree: FORK_TREE,
+			treeLeafId: "d",
+			promptEvents: slowTurnEvents(),
+		});
+		const running = manager.handle({
+			action: "send",
+			sessionId: "fork-copy",
+			prompt: "work",
+		});
+		await waitFor(() => manager.status("fork-copy") === "running");
+		await expect(
+			manager.handle({ action: "fork", sessionId: "fork-copy" }),
+		).rejects.toThrow(/Wait for Pi to finish/);
+		await running;
+		expect(
+			await manager.handle({ action: "fork", sessionId: "fork-copy" }),
+		).toMatchObject({ sessionId: "fork-1", forkedFromSessionId: "fork-copy" });
+		expect(fake.received().some((line) => line.type === "clone")).toBe(true);
+		expect(fake.received().some((line) => line.type === "fork")).toBe(false);
+	});
+
+	it("refuses to fork while queued messages wait, and reports a cancelled fork", async () => {
+		writeForkSession("fork-held");
+		createManager({
+			tree: FORK_TREE,
+			treeLeafId: "d",
+			forkCancelled: true,
+			promptEvents: slowTurnEvents({
+				stopReason: "error",
+				errorMessage: "provider down",
+			}),
+		});
+		const first = manager.handle({
+			action: "send",
+			sessionId: "fork-held",
+			prompt: "fails",
+		});
+		await waitFor(() => manager.status("fork-held") === "running");
+		const queued = (await manager.handle({
+			action: "send",
+			sessionId: "fork-held",
+			prompt: "waits",
+		})) as QueueResult;
+		await first;
+		await expect(
+			manager.handle({
+				action: "fork",
+				sessionId: "fork-held",
+				forkBeforeRunCount: 1,
+			}),
+		).rejects.toThrow(/queued messages/);
+		await manager.handle({
+			action: "remove_pending_prompt",
+			sessionId: "fork-held",
+			promptId: String(queued.promptsInQueue[0]?.id),
+		});
+		await expect(
+			manager.handle({
+				action: "fork",
+				sessionId: "fork-held",
+				forkBeforeRunCount: 1,
+			}),
+		).rejects.toThrow(/cancelled the fork/);
+		expect(manager.isLive("fork-held")).toBe(true);
 	});
 
 	it("hands the prompt back when Pi rejects it before acceptance", async () => {

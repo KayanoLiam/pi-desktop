@@ -35,6 +35,9 @@ export type FakePiScenario = {
 	treeNavigationCancelled?: boolean;
 	/** Simulates a live Pi process whose Desktop gate extension failed to load. */
 	treeCommandMissing?: boolean;
+	/** `fork`/`clone` switch to `fork-<n>`; with entries, the new session file is written. */
+	forkFileEntries?: unknown[];
+	forkCancelled?: boolean;
 	lastAssistantText?: string | null;
 	compactResult?: Record<string, unknown>;
 	compactError?: string;
@@ -51,7 +54,8 @@ export type FakePiScenario = {
 };
 
 const FAKE_PI_SOURCE = String.raw`
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const scenarioPath = process.env.FAKE_PI_SCENARIO;
@@ -73,14 +77,14 @@ if (scenario.startupStdoutNoise) process.stdout.write(scenario.startupStdoutNois
 
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const sessionId = (() => {
+let sessionId = (() => {
 	const index = args.indexOf("--session-id");
 	if (index >= 0) return args[index + 1];
 	const sessionIndex = args.indexOf("--session");
 	if (sessionIndex >= 0) return "resumed-" + args[sessionIndex + 1].split("/").pop().replace(/\.jsonl$/, "");
 	return "fake-session";
 })();
-const sessionFile = (() => {
+let sessionFile = (() => {
 	const sessionIndex = args.indexOf("--session");
 	if (sessionIndex >= 0) return args[sessionIndex + 1];
 	return process.cwd() + "/sessions/" + sessionId + ".jsonl";
@@ -107,6 +111,17 @@ let abortRequested = false;
 let uiWaiters = [];
 let sessionName;
 let treeLeafId = scenario.treeLeafId ?? null;
+let forkCount = 0;
+const switchToFork = () => {
+	forkCount += 1;
+	sessionId = "fork-" + forkCount;
+	sessionFile = dirname(sessionFile) + "/" + sessionId + ".jsonl";
+	if (scenario.forkFileEntries) {
+		mkdirSync(dirname(sessionFile), { recursive: true });
+		const header = { type: "session", version: 3, id: sessionId, cwd: process.cwd(), timestamp: "2026-09-01T00:00:00.000Z" };
+		writeFileSync(sessionFile, [header, ...scenario.forkFileEntries].map((line) => JSON.stringify(line)).join("\n") + "\n");
+	}
+};
 const findTreeNode = (target, nodes) => {
 	for (const node of nodes) {
 		if (node.entry.id === target) return node;
@@ -340,6 +355,30 @@ async function handle(line) {
 		case "set_session_name":
 			sessionName = command.name;
 			out({ id, type: "response", command: "set_session_name", success: true });
+			return;
+		case "fork": {
+			const node = findTreeNode(command.entryId, scenario.tree ?? []);
+			if (!node || node.entry.type !== "message" || node.entry.message?.role !== "user") {
+				out({ id, type: "response", command: "fork", success: false, error: "Invalid entry ID for forking" });
+				return;
+			}
+			if (scenario.forkCancelled) {
+				out({ id, type: "response", command: "fork", success: true, data: { text: "", cancelled: true } });
+				return;
+			}
+			switchToFork();
+			const content = node.entry.message.content;
+			const text = typeof content === "string" ? content : (content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("");
+			out({ id, type: "response", command: "fork", success: true, data: { text, cancelled: false } });
+			return;
+		}
+		case "clone":
+			if (scenario.forkCancelled) {
+				out({ id, type: "response", command: "clone", success: true, data: { cancelled: true } });
+				return;
+			}
+			switchToFork();
+			out({ id, type: "response", command: "clone", success: true, data: { cancelled: false } });
 			return;
 		case "clear_queue":
 			out({ id, type: "response", command: "clear_queue", success: true, data: { steering: [], followUp: [] } });

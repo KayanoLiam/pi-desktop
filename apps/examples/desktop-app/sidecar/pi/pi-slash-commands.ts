@@ -81,13 +81,8 @@ export const PI_BUILTIN_SLASH_COMMANDS: PiBuiltinSlashCommand[] = [
 		source: "builtin",
 	},
 	{
-		name: "tree",
-		description: "Navigate the session tree (terminal only)",
-		source: "builtin",
-	},
-	{
 		name: "clone",
-		description: "Duplicate the current session (not available in Desktop)",
+		description: "Duplicate the current session (use Fork on a message)",
 		source: "builtin",
 	},
 	{
@@ -193,7 +188,7 @@ const DESKTOP_UI_ACTIONS: Record<
 	fork: {
 		uiAction: "fork",
 		message:
-			"Pi's message picker is not available in Desktop. This session was not forked.",
+			"Pi's message picker is not available in Desktop. This session was not forked. Use Edit on one of your messages to fork from before it, or Fork to copy the whole session.",
 	},
 };
 
@@ -207,7 +202,7 @@ const UNSUPPORTED_BUILTIN_GUIDANCE: Record<string, string> = {
 	import:
 		"/import is not available in Desktop. Pi's terminal command replaces the current session from a JSONL file after confirmation, and that operation is not a session RPC command. Nothing was imported.",
 	clone:
-		"/clone is not available in Desktop. Nothing was duplicated. Pi's terminal clone and fork pickers are not available for Pi threads here.",
+		"/clone is not available as a command in Desktop. Nothing was duplicated. Use Fork on a message to copy the whole session, or Edit on one of your messages to fork from before it.",
 	share:
 		"/share uploads the session as a secret GitHub gist. Desktop does not share or upload sessions. Nothing was shared.",
 	bug: "/bug is not available in Desktop. Nothing was reported or uploaded. Use Pi in a terminal to report a bug.",

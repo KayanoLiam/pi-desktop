@@ -715,6 +715,51 @@ describe("useChatSession", () => {
 		]);
 	});
 
+	it("sends the edited message id with a fork so Pi can fork at that entry", async () => {
+		const requests: Record<string, unknown>[] = [];
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command !== "chat_session_command") return [];
+				const request = args?.request as Record<string, unknown>;
+				requests.push(request);
+				if (request.action === "start") return { sessionId: "fork-source" };
+				if (request.action === "fork")
+					return {
+						sessionId: "fork-1",
+						forkedFromSessionId: "fork-source",
+						messages: [
+							{
+								id: "a",
+								sessionId: "fork-1",
+								role: "user",
+								content: "Question one",
+								createdAt: 1,
+							},
+						],
+					};
+				return { promptsInQueue: [] };
+			},
+		);
+		await act(async () => current.start(current.config));
+		let result: Awaited<ReturnType<ChatSessionHook["forkSession"]>> | undefined;
+		await act(async () => {
+			result = await current.forkSession({ beforeRunCount: 2, messageId: "c" });
+		});
+		expect(requests.find((request) => request.action === "fork")).toMatchObject(
+			{
+				action: "fork",
+				sessionId: "fork-source",
+				forkBeforeRunCount: 2,
+				forkMessageId: "c",
+			},
+		);
+		expect(result).toMatchObject({
+			newSessionId: "fork-1",
+			forkedFromSessionId: "fork-source",
+			messages: [{ id: "a", content: "Question one" }],
+		});
+	});
+
 	it("steers the first server entry after enqueue acknowledgement without waiting for the active response", async () => {
 		const sessionId = "session-quick-steer";
 		const activeResponse = deferred<unknown>();

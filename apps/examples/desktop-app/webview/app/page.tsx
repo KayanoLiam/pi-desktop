@@ -1980,6 +1980,10 @@ function ChatThreadPane({
 				cwd,
 				workspaceRoot,
 				startedAt: new Date().toISOString(),
+				// Opening it must keep the Pi runtime, as for Pi sessions from history.
+				...(config.runtime === "pi"
+					? { source: "pi", origin: "local" as const }
+					: {}),
 				metadata: {
 					fork: {
 						forkedFromSessionId: result.forkedFromSessionId,
@@ -2008,8 +2012,8 @@ function ChatThreadPane({
 	);
 
 	const handleEditMessage = useCallback(
-		async (_messageId: string, content: string, runCount: number) => {
-			const result = await forkSession({ beforeRunCount: runCount });
+		async (messageId: string, content: string, runCount: number) => {
+			const result = await forkSession({ beforeRunCount: runCount, messageId });
 			openForkedSession(result, content);
 		},
 		[forkSession, openForkedSession],
@@ -2527,17 +2531,13 @@ function ChatThreadPane({
 								error={cloudSessionError?.message ?? displayedError}
 								importedFromTool={importedFromTool}
 								messages={displayedMessages}
-								onEditMessage={
-									isCloudSession || isPiThread ? undefined : handleEditMessage
-								}
+								onEditMessage={isCloudSession ? undefined : handleEditMessage}
 								onRestoreCheckpoint={
 									isCloudSession || isPiThread
 										? undefined
 										: handleRestoreCheckpoint
 								}
-								onForkSession={
-									isCloudSession || isPiThread ? undefined : handleForkSession
-								}
+								onForkSession={isCloudSession ? undefined : handleForkSession}
 								onProceedWhileRunning={
 									isCloudSession || isPiThread ? undefined : proceedWhileRunning
 								}

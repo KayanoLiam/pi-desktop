@@ -130,6 +130,55 @@ function findPiTreeNode(
 	return undefined;
 }
 
+/**
+ * User messages on the branch ending at `leafId`, root first: the ones the
+ * transcript shows, so the Nth entry is the webview's Nth user turn. Pi's
+ * `get_fork_messages` cannot be used for this: it lists every branch.
+ */
+function piBranchUserEntryIds(
+	tree: PiTreeNode[],
+	leafId: string | null,
+): string[] {
+	const byId = new Map<string, PiTreeNode>();
+	const pending = [...tree];
+	while (pending.length) {
+		const node = pending.pop();
+		if (!node) continue;
+		byId.set(node.entry.id, node);
+		pending.push(...node.children);
+	}
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	let node = leafId ? byId.get(leafId) : undefined;
+	while (node && !seen.has(node.entry.id)) {
+		seen.add(node.entry.id);
+		const { entry } = node;
+		if (
+			entry.type === "message" &&
+			entry.message?.role === "user" &&
+			hasUserContent(entry.message.content)
+		)
+			ids.push(entry.id);
+		node = entry.parentId ? byId.get(entry.parentId) : undefined;
+	}
+	return ids.reverse();
+}
+
+/** Mirrors the transcript projection, which skips user entries with no text or image. */
+function hasUserContent(content: unknown): boolean {
+	if (typeof content === "string") return content.trim().length > 0;
+	return (
+		Array.isArray(content) &&
+		content.some(
+			(block) =>
+				block?.type === "image" ||
+				(block?.type === "text" &&
+					typeof block.text === "string" &&
+					block.text.trim().length > 0),
+		)
+	);
+}
+
 type PiImage = { type: "image"; data: string; mimeType: string };
 
 /**
@@ -384,6 +433,8 @@ export class PiSessionManager {
 				return this.updatePendingPrompt(request);
 			case "remove_pending_prompt":
 				return this.removePendingPrompt(request);
+			case "fork":
+				return this.fork(request);
 			default:
 				throw new Error(
 					`${request.action} is not supported for Pi sessions yet`,
@@ -759,6 +810,118 @@ export class PiSessionManager {
 			);
 		}
 		return live.pending.findIndex((item) => item.id === promptId);
+	}
+
+	// ── Fork ───────────────────────────────────────────────────────────────
+
+	/**
+	 * Edit a message (fork before it) or copy the whole session (no run count).
+	 * Pi writes the new session and rebinds its process to it, so the live
+	 * process moves to the new id; the original thread relaunches from its file
+	 * on the next send.
+	 */
+	async fork(request: ChatSessionCommandRequest): Promise<unknown> {
+		const sessionId = request.sessionId?.trim();
+		if (!sessionId) throw new Error("sessionId is required");
+		const live = await this.ensureLiveSession(sessionId);
+		if (live.compacting || live.busy || live.run || live.navigating) {
+			throw new Error("Wait for Pi to finish before forking this session.");
+		}
+		if (live.pending.length > 0) {
+			throw new Error(
+				"Send or remove the queued messages before forking this session.",
+			);
+		}
+		const response =
+			request.forkBeforeRunCount === undefined
+				? await live.process.request<{ cancelled?: boolean }>({
+						type: "clone",
+					})
+				: await live.process.request<{ cancelled?: boolean }>({
+						type: "fork",
+						entryId: await this.forkEntryId(
+							live,
+							request.forkMessageId,
+							request.forkBeforeRunCount,
+						),
+					});
+		if (!response.success) throw new Error(response.error);
+		if (response.data?.cancelled) {
+			throw new Error("A Pi extension cancelled the fork.");
+		}
+		const state = await live.process.request<{
+			sessionId?: string;
+			sessionFile?: string;
+		}>({ type: "get_state" });
+		const forkedId = state.success ? state.data?.sessionId?.trim() : undefined;
+		const forkedFile = state.success ? state.data?.sessionFile : undefined;
+		if (!forkedId || forkedId === sessionId) {
+			// The process may be bound to either session now: restart it cleanly.
+			await this.terminate(sessionId, "Pi fork failed");
+			throw new Error(
+				state.success
+					? "Pi did not start a new session for the fork."
+					: state.error,
+			);
+		}
+		this.moveLiveSession(live, forkedId, forkedFile);
+		return {
+			sessionId: forkedId,
+			forkedFromSessionId: sessionId,
+			messages: this.readMessages(forkedId) ?? [],
+		};
+	}
+
+	/** The transcript's message id is Pi's entry id once loaded from disk; a just-sent one is found by its turn number. */
+	private async forkEntryId(
+		live: PiLiveSession,
+		messageId: string | undefined,
+		runCount: number,
+	): Promise<string> {
+		const { tree, leafId } = await this.getTree(live.sessionId);
+		const ids = piBranchUserEntryIds(tree, leafId);
+		const exact = messageId?.trim();
+		if (exact && ids.includes(exact)) return exact;
+		const byCount =
+			Number.isInteger(runCount) && runCount >= 1
+				? ids[runCount - 1]
+				: undefined;
+		if (byCount) return byCount;
+		throw new Error(
+			"That message is not on the current Pi branch. Reopen the session and try again.",
+		);
+	}
+
+	private moveLiveSession(
+		live: PiLiveSession,
+		forkedId: string,
+		sessionFile: string | undefined,
+	): void {
+		const previousId = live.sessionId;
+		this.live.delete(previousId);
+		live.sessionId = forkedId;
+		live.sessionFile = sessionFile || undefined;
+		live.treeLeafId = undefined;
+		live.queue = { steering: [], followUp: [] };
+		live.lastActivityAt = Date.now();
+		if (typeof live.config.sessionId === "string") {
+			live.config = { ...live.config, sessionId: forkedId };
+		}
+		this.live.set(forkedId, live);
+		const scope = this.modelScopes.get(previousId);
+		if (scope) this.modelScopes.set(forkedId, scope);
+		if (live.sessionFile) this.files.remember(forkedId, live.sessionFile);
+		// Pi writes the forked file only once it holds an assistant message (as
+		// when editing the first message); keep the config until then.
+		if (!live.sessionFile || !existsSync(live.sessionFile)) {
+			this.unpersistedSessionConfigs.set(forkedId, {
+				...live.config,
+				...(live.provider ? { provider: live.provider } : {}),
+				...(live.model ? { model: live.model } : {}),
+				...(live.thinkingLevel ? { piThinkingLevel: live.thinkingLevel } : {}),
+				cwd: live.cwd,
+			});
+		}
 	}
 
 	// ── Session metadata ───────────────────────────────────────────────────

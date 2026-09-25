@@ -4226,6 +4226,8 @@ export function useChatSession(environmentId: string) {
 	const forkSession = useCallback(
 		async (options?: {
 			beforeRunCount?: number;
+			/** Transcript id of the edited message; Pi uses it as the fork entry. */
+			messageId?: string;
 		}): Promise<{
 			newSessionId: string;
 			forkedFromSessionId: string;
@@ -4243,6 +4245,7 @@ export function useChatSession(environmentId: string) {
 				sessionId: activeSessionId,
 				config,
 				forkBeforeRunCount: options?.beforeRunCount,
+				forkMessageId: options?.messageId,
 			})) as {
 				sessionId?: string;
 				forkedFromSessionId?: string;
