@@ -88,10 +88,24 @@ jobs:
         working-directory: apps/examples/desktop-app
         run: bun run package:desktop:mac --allow-unsigned-mac
 
-      - name: Package Windows or Linux
-        if: runner.os != 'macOS'
+      # Tauri's WiX/MSI bundler rejects this repo's 0.1.0-beta.1 version.
+      # The regular desktop release also ships only the NSIS installer.
+      - name: Package Windows (NSIS, unsigned)
+        if: runner.os == 'Windows'
+        shell: bash
         working-directory: apps/examples/desktop-app
-        run: bun run package:desktop:${{ matrix.platform }}
+        run: |
+          bunx tauri build --bundles nsis
+          bun run package:desktop:windows --skip-build
+
+      # The default 'all' bundle builds DEB/RPM but this runner's linuxdeploy
+      # fails on the subsequent AppImage. Keep both working native installers.
+      - name: Package Linux (DEB and RPM)
+        if: runner.os == 'Linux'
+        working-directory: apps/examples/desktop-app
+        run: |
+          bunx tauri build --bundles deb,rpm
+          bun run package:desktop:linux --skip-build
 
       - name: Verify installers
         shell: bash
@@ -101,8 +115,8 @@ jobs:
           ls -lah "$root"
           case '${{ matrix.platform }}' in
             mac) test -n "$(find "$root" -maxdepth 1 -name '*.dmg' -print -quit)" ;;
-            windows) test -n "$(find "$root" -maxdepth 1 \( -name '*.msi' -o -name '*.exe' \) -print -quit)" ;;
-            linux) test -n "$(find "$root" -maxdepth 1 \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print -quit)" ;;
+            windows) test -n "$(find "$root" -maxdepth 1 -name '*.exe' -print -quit)" ;;
+            linux) test -n "$(find "$root" -maxdepth 1 -name '*.deb' -print -quit)" && test -n "$(find "$root" -maxdepth 1 -name '*.rpm' -print -quit)" ;;
           esac
 
       - name: Upload test installers
