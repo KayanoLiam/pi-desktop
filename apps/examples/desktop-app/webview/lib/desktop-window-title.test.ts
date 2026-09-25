@@ -2,9 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invoke, setTitle } = vi.hoisted(() => ({
+const { invoke, setTitle, getName } = vi.hoisted(() => ({
 	invoke: vi.fn(),
 	setTitle: vi.fn(async () => undefined),
+	getName: vi.fn(async () => "Pi"),
 }));
 vi.mock("@/lib/desktop-client", () => ({
 	desktopClient: { invoke },
@@ -13,6 +14,7 @@ vi.mock("@/lib/desktop-client", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: () => ({ setTitle }),
 }));
+vi.mock("@tauri-apps/api/app", () => ({ getName }));
 
 async function importFresh() {
 	vi.resetModules();
@@ -22,6 +24,8 @@ async function importFresh() {
 beforeEach(() => {
 	invoke.mockReset();
 	setTitle.mockClear();
+	getName.mockReset();
+	getName.mockResolvedValue("Pi");
 	// biome-ignore lint/suspicious/noExplicitAny: test-only global shim for the Tauri bridge marker
 	delete (window as any).__TAURI_INTERNALS__;
 });
@@ -53,6 +57,20 @@ describe("desktop window title", () => {
 		);
 	});
 
+	it("prefers the bundle's configured product name over the version guess", async () => {
+		const { buildDesktopWindowTitle } = await importFresh();
+		expect(buildDesktopWindowTitle("0.1.0-beta.1", "Pi")).toBe(
+			"Pi v0.1.0-beta.1",
+		);
+		expect(buildDesktopWindowTitle("0.1.0-beta.1", "Pi Desktop")).toBe(
+			"Pi Desktop v0.1.0-beta.1",
+		);
+		expect(buildDesktopWindowTitle("0.1.0-beta.1", "  ")).toBe(
+			"Pi Beta v0.1.0-beta.1",
+		);
+		expect(buildDesktopWindowTitle(undefined, "Pi Desktop")).toBe("Pi Desktop");
+	});
+
 	it("does nothing outside the Tauri shell", async () => {
 		const { syncDesktopWindowTitle } = await importFresh();
 		await syncDesktopWindowTitle();
@@ -77,6 +95,25 @@ describe("desktop window title", () => {
 		expect(setTitle).toHaveBeenCalledWith(
 			`${DEFAULT_DESKTOP_WINDOW_TITLE} v1.2.3`,
 		);
+	});
+
+	it("titles the window with the Tauri app name, or the version guess without one", async () => {
+		// biome-ignore lint/suspicious/noExplicitAny: test-only global shim for the Tauri bridge marker
+		(window as any).__TAURI_INTERNALS__ = {};
+		invoke.mockResolvedValue({
+			workspaceRoot: "",
+			cwd: "",
+			appVersion: "0.1.0-beta.1",
+		});
+		getName.mockResolvedValue("Pi Desktop");
+
+		const { syncDesktopWindowTitle } = await importFresh();
+		await syncDesktopWindowTitle();
+		expect(setTitle).toHaveBeenLastCalledWith("Pi Desktop v0.1.0-beta.1");
+
+		getName.mockRejectedValue(new Error("app name unavailable"));
+		await syncDesktopWindowTitle();
+		expect(setTitle).toHaveBeenLastCalledWith("Pi Beta v0.1.0-beta.1");
 	});
 
 	it("leaves the title alone when the version is missing or the sidecar call fails", async () => {

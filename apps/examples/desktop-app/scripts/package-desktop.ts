@@ -258,7 +258,8 @@ const collectLinuxArtifacts = (): string[] =>
 				file.endsWith(".deb") ||
 				file.endsWith(".rpm"),
 		)
-		.map((file) => copyArtifact(file, path.basename(file)));
+		// Linux uses the "Pi Desktop" product name; keep spaces out of file names.
+		.map((file) => copyArtifact(file, sanitizeName(path.basename(file))));
 
 const collectArtifacts = async (
 	platform: DesktopPlatform,

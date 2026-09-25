@@ -4,11 +4,29 @@ import { desktopClient, isTauriAvailable } from "@/lib/desktop-client";
 
 export const DEFAULT_DESKTOP_WINDOW_TITLE = STABLE_PRODUCT_NAME;
 
-export function buildDesktopWindowTitle(version: string | undefined): string {
+/**
+ * `appName` is the running bundle's configured product name ("Pi", "Pi Dev",
+ * "Pi Beta", or "Pi Desktop" on Linux). Without it the name is derived from
+ * the version, which cannot tell a stable-config prerelease from a beta build.
+ */
+export function buildDesktopWindowTitle(
+	version: string | undefined,
+	appName?: string,
+): string {
 	const trimmed = version?.trim();
-	return trimmed
-		? `${productNameForVersion(trimmed)} v${trimmed}`
-		: DEFAULT_DESKTOP_WINDOW_TITLE;
+	const name =
+		appName?.trim() ||
+		(trimmed ? productNameForVersion(trimmed) : DEFAULT_DESKTOP_WINDOW_TITLE);
+	return trimmed ? `${name} v${trimmed}` : name;
+}
+
+async function readTauriAppName(): Promise<string | undefined> {
+	try {
+		const { getName } = await import("@tauri-apps/api/app");
+		return (await getName()).trim() || undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -28,7 +46,9 @@ export async function syncDesktopWindowTitle(): Promise<void> {
 			return;
 		}
 		const { getCurrentWindow } = await import("@tauri-apps/api/window");
-		await getCurrentWindow().setTitle(buildDesktopWindowTitle(ctx.appVersion));
+		await getCurrentWindow().setTitle(
+			buildDesktopWindowTitle(ctx.appVersion, await readTauriAppName()),
+		);
 	} catch {
 		// Keep the default static title if the sidecar or window API is unavailable.
 	}
