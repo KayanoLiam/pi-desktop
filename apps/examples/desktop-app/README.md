@@ -60,14 +60,11 @@ this path; `sidecar/ARCHITECTURE.md` describes the design. In short:
   Pi's `agent_settled` with the same result shape the Cline path returns, so
   `use-chat-session.ts` carries `runtime` and, for Pi slash input, calls
   `execute_pi_command` before any optimistic chat turn.
-- Pi has no built-in tool approval. The sidecar writes a small `tool_call`
-  hook extension to `~/.cline/data/pi-desktop/extensions/` (content-addressed)
-  and loads it into every Pi process. It asks through `ctx.ui.confirm` with a
-  marker title; the sidecar answers immediately when the thread auto-approves
-  (default, matching the Pi CLI) or shows the approval card when the composer's
-  shield is set to **Ask first**. Rejected calls are blocked with a reason that
-  Pi sends back to the model.
-- Other extension dialogs (`select`, `input`, `editor`, `confirm`) become
+- Pi tool execution follows the Pi CLI: the desktop adds no tool-call approval
+  hook or Auto-approve / Ask first switch. Legacy `autoApproveTools` values do
+  not gate Pi tools. User-installed extensions can still enforce their own
+  permissions; their confirmations are never automatically approved.
+- Extension dialogs (`select`, `input`, `editor`, `confirm`) become
   question cards; `notify` becomes a transcript log entry; `setStatus`,
   `setWidget`, `setTitle` and `set_editor_text` are ignored.
 - **Stop** sends Pi's `abort`; if Pi does not answer within ten seconds the
@@ -670,7 +667,7 @@ its stored data are unchanged.
 - [`sidecar/pi/pi-session-files.ts`](./sidecar/pi/pi-session-files.ts) - read-only Pi session history
 - [`sidecar/pi/pi-slash-commands.ts`](./sidecar/pi/pi-slash-commands.ts) - Pi builtin slash commands, desktop UI actions, guidance
 - [`sidecar/pi/pi-extensions.ts`](./sidecar/pi/pi-extensions.ts) - installed Pi extensions: list, enable/disable, uninstall
-- [`sidecar/pi/pi-desktop-gate-extension.ts`](./sidecar/pi/pi-desktop-gate-extension.ts) - generated tool-approval gate and tree-navigation command
+- [`sidecar/pi/pi-desktop-gate-extension.ts`](./sidecar/pi/pi-desktop-gate-extension.ts) - generated tree-navigation command (legacy filename; no approval hook)
 - [`webview/lib/desktop-client.ts`](./webview/lib/desktop-client.ts) - typed desktop websocket client
 - [`webview/hooks/use-chat-session.ts`](./webview/hooks/use-chat-session.ts) - UI chat session state + backend subscriptions
 - [`webview/lib/chat-schema.ts`](./webview/lib/chat-schema.ts) - chat message schema used by the UI

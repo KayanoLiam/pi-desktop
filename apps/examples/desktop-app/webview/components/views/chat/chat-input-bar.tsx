@@ -13,8 +13,6 @@ import {
 	Cpu,
 	Paperclip,
 	Plus,
-	ShieldCheck,
-	ShieldQuestionMark,
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -313,8 +311,6 @@ type ChatInputBarProps = {
 	 */
 	runtime?: ChatRuntime;
 	/** Pi threads: whether tools run without asking (the default). */
-	autoApproveTools?: boolean;
-	onAutoApproveToolsChange?: (autoApproveTools: boolean) => void;
 	/** The thread's current Pi selection (seeds the picker for resumed sessions). */
 	piSelection?: PiModelSelectionValue;
 	onPiSelectionChange?: (value: PiModelSelectionValue) => void;
@@ -379,8 +375,6 @@ function ChatInputBarImpl({
 	variant = "conversation",
 	readOnly = false,
 	runtime = "cline",
-	autoApproveTools = true,
-	onAutoApproveToolsChange,
 	piSelection,
 	onPiSelectionChange,
 	onCyclePiModel,
@@ -1502,34 +1496,7 @@ function ChatInputBarImpl({
 							/>
 						)}
 					</div>
-					{isPiRuntime ? (
-						<button
-							aria-label="Tool approvals"
-							aria-pressed={!autoApproveTools}
-							className={cn(
-								"flex h-7 items-center gap-1.5 rounded-md px-2 text-sm hover:bg-surface-hover",
-								autoApproveTools
-									? "text-muted-foreground"
-									: "text-amber-600 dark:text-amber-400",
-							)}
-							onClick={() => onAutoApproveToolsChange?.(!autoApproveTools)}
-							title={
-								autoApproveTools
-									? "Tools run without asking. Click to review each tool call before it runs."
-									: "Each tool call waits for your approval. Click to let tools run without asking."
-							}
-							type="button"
-						>
-							{autoApproveTools ? (
-								<ShieldCheck className="size-3" />
-							) : (
-								<ShieldQuestionMark className="size-3" />
-							)}
-							<span className="max-[560px]:sr-only">
-								{autoApproveTools ? "Auto-approve" : "Ask first"}
-							</span>
-						</button>
-					) : (
+					{!isPiRuntime && (
 						<Select
 							disabled={cloudSettingsLocked || modelSupportsReasoning !== true}
 							onValueChange={handleEffortChange}

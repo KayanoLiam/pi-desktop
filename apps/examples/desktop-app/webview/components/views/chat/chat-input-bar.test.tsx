@@ -131,8 +131,6 @@ async function renderVoiceComposer({
 	readOnly = false,
 	runtime,
 	provider = "cline",
-	autoApproveTools,
-	onAutoApproveToolsChange,
 	onPiSelectionChange,
 	onCyclePiModel,
 	executionTarget,
@@ -154,8 +152,6 @@ async function renderVoiceComposer({
 	readOnly?: boolean;
 	runtime?: "cline" | "pi";
 	provider?: string;
-	autoApproveTools?: boolean;
-	onAutoApproveToolsChange?: (autoApproveTools: boolean) => void;
 	onPiSelectionChange?: Parameters<
 		typeof ChatInputBar
 	>[0]["onPiSelectionChange"];
@@ -172,8 +168,6 @@ async function renderVoiceComposer({
 			<WorkspaceProvider value={workspaceValue}>
 				<ChatInputBar
 					runtime={runtime}
-					autoApproveTools={autoApproveTools}
-					onAutoApproveToolsChange={onAutoApproveToolsChange}
 					onPiSelectionChange={onPiSelectionChange}
 					onCyclePiModel={onCyclePiModel}
 					readOnly={readOnly}
@@ -262,9 +256,7 @@ describe("ChatInputBar", () => {
 		).not.toBeNull();
 		// Cline's reasoning selector is replaced by the tool-approval switch.
 		expect(container.querySelector('[aria-label="Thinking level"]')).toBeNull();
-		expect(
-			container.querySelector('[aria-label="Tool approvals"]'),
-		).not.toBeNull();
+		expect(container.querySelector('[aria-label="Tool approvals"]')).toBeNull();
 		expect(container.textContent).not.toContain("not connected yet");
 		const sendButton = container.querySelector<HTMLButtonElement>(
 			'button[aria-label="Send message"]',
@@ -351,35 +343,11 @@ describe("ChatInputBar", () => {
 		expect(onSend).toHaveBeenCalledExactlyOnceWith("/new");
 	});
 
-	it("toggles Pi tool approvals from the composer", async () => {
-		const onAutoApproveToolsChange = vi.fn();
-		await renderVoiceComposer({
-			runtime: "pi",
-			provider: "p",
-			model: "m",
-			autoApproveTools: true,
-			onAutoApproveToolsChange,
-		});
-		const toggle = container.querySelector<HTMLButtonElement>(
-			'[aria-label="Tool approvals"]',
-		);
-		expect(toggle?.getAttribute("aria-pressed")).toBe("false");
-		expect(toggle?.textContent).toContain("Auto-approve");
-		await act(async () => toggle?.click());
-		expect(onAutoApproveToolsChange).toHaveBeenCalledWith(false);
-		await renderVoiceComposer({
-			runtime: "pi",
-			provider: "p",
-			model: "m",
-			autoApproveTools: false,
-			onAutoApproveToolsChange,
-		});
-		expect(
-			container
-				.querySelector('[aria-label="Tool approvals"]')
-				?.getAttribute("aria-pressed"),
-		).toBe("true");
-		expect(container.textContent).toContain("Ask first");
+	it("does not add a desktop approval toggle to Pi", async () => {
+		await renderVoiceComposer({ runtime: "pi", provider: "p", model: "m" });
+		expect(container.querySelector('[aria-label="Tool approvals"]')).toBeNull();
+		expect(container.textContent).not.toContain("Auto-approve");
+		expect(container.textContent).not.toContain("Ask first");
 	});
 
 	it("lists Pi's commands in the slash menu for Pi threads", async () => {

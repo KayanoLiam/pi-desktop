@@ -13,7 +13,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSidecarContext } from "../context";
 import type { SidecarContext, SidecarWebSocketClient } from "../types";
-import { PI_DESKTOP_APPROVAL_TITLE } from "./pi-desktop-gate-extension";
 import { PiSessionFiles } from "./pi-session-files";
 import { PiSessionManager } from "./pi-session-manager";
 import { PI_BUILTIN_SLASH_COMMANDS } from "./pi-slash-commands";
@@ -640,22 +639,20 @@ describe("PiSessionManager", () => {
 		}
 	});
 
-	it("auto-approves gate prompts by default and asks the desktop when the thread opts in", async () => {
-		const gateRequest = {
-			type: "extension_ui_request",
-			id: "ui-1",
-			method: "confirm",
-			title: PI_DESKTOP_APPROVAL_TITLE,
-			message: JSON.stringify({
-				toolCallId: "call_9",
-				toolName: "write",
-				input: { path: "a.txt", content: "x" },
-			}),
-		};
+	it.each([
+		true,
+		false,
+	])("preserves extension confirmations regardless of legacy autoApproveTools=%s", async (autoApproveTools) => {
 		createManager({
 			promptEvents: [
 				{ type: "agent_start" },
-				gateRequest,
+				{
+					type: "extension_ui_request",
+					id: "confirm-1",
+					method: "confirm",
+					title: "User extension confirmation",
+					message: "Continue?",
+				},
 				{ __waitForUi__: true },
 				{ type: "agent_end", messages: [], willRetry: false },
 			],
@@ -664,57 +661,33 @@ describe("PiSessionManager", () => {
 			action: "start",
 			config: {
 				runtime: "pi",
-				sessionId: "s-auto",
+				sessionId: "s-confirm",
 				provider: "p",
 				model: "m",
 				cwd: dir,
+				autoApproveTools,
 			},
 		});
-		await manager.handle({
-			action: "send",
-			sessionId: "s-auto",
-			prompt: "write it",
-		});
-		const autoResponses = fake
-			.received()
-			.filter((line) => line.type === "extension_ui_response");
-		expect(autoResponses).toEqual([
-			{ type: "extension_ui_response", id: "ui-1", confirmed: true },
-		]);
-		expect(events("tool_approval_state")).toEqual([]);
-
-		// Opt into approvals: the request reaches the desktop card and is rejected.
 		const pending = manager.handle({
 			action: "send",
-			sessionId: "s-auto",
-			prompt: "write again",
-			config: { autoApproveTools: false },
+			sessionId: "s-confirm",
+			prompt: "go",
 		});
-		await waitFor(() => events("tool_approval_state").length > 0);
-		const state = events("tool_approval_state").at(-1) as {
-			items: Array<Record<string, unknown>>;
+		await waitFor(() => events("ask_question_requested").length === 1);
+		expect(
+			fake.received().filter((line) => line.type === "extension_ui_response"),
+		).toEqual([]);
+		expect(events("tool_approval_state")).toEqual([]);
+		const question = events("ask_question_requested")[0] as {
+			requestId: string;
 		};
-		expect(state.items).toHaveLength(1);
-		expect(state.items[0]).toMatchObject({
-			sessionId: "s-auto",
-			toolCallId: "call_9",
-			toolName: "editor",
-			input: { path: "a.txt", new_text: "x" },
-		});
-		const requestId = state.items[0].requestId as string;
-		const approval = ctx.pendingApprovals.get(requestId);
-		expect(approval?.owner).toBe(approver);
-		await approval?.resolve({ approved: false, reason: "no" });
-		ctx.pendingApprovals.delete(requestId);
+		ctx.pendingQuestions.get(question.requestId)?.resolve("No");
 		await pending;
-		const responses = fake
-			.received()
-			.filter((line) => line.type === "extension_ui_response");
-		expect(responses.at(-1)).toEqual({
-			type: "extension_ui_response",
-			id: "ui-1",
-			confirmed: false,
-		});
+		expect(
+			fake.received().filter((line) => line.type === "extension_ui_response"),
+		).toEqual([
+			{ type: "extension_ui_response", id: "confirm-1", confirmed: false },
+		]);
 	});
 
 	it("turns extension select/input dialogs into desktop questions", async () => {

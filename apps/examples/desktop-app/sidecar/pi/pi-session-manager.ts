@@ -14,7 +14,6 @@ import {
 	getEnvironmentContext,
 	getOwnerContext,
 	sendEvent,
-	sendEventToClient,
 } from "../context";
 import { listPiRpcModels, resolvePiModelPatterns } from "../pi-model-catalog";
 import {
@@ -23,14 +22,10 @@ import {
 	type JsonRecord,
 	LOCAL_ENVIRONMENT_ID,
 	type PendingAskQuestion,
-	type PendingToolApproval,
 	type PromptInQueue,
 	type SidecarContext,
 } from "../types";
-import {
-	ensurePiDesktopGateExtension,
-	parsePiToolApprovalRequest,
-} from "./pi-desktop-gate-extension";
+import { ensurePiDesktopGateExtension } from "./pi-desktop-gate-extension";
 import {
 	isPiExtensionUiRequest,
 	type PiRpcEvent,
@@ -2545,60 +2540,6 @@ export class PiSessionManager {
 				...response,
 			} as never);
 		};
-		const approval = parsePiToolApprovalRequest({
-			method: request.method,
-			title: typeof request.title === "string" ? request.title : undefined,
-			message:
-				typeof request.message === "string" ? request.message : undefined,
-		});
-		if (approval) {
-			if (live.config.autoApproveTools !== false) {
-				respond({ confirmed: true });
-				return;
-			}
-			const owner = [...this.ctx.wsClients].find(
-				(client) => client.data?.canApproveTools === true,
-			);
-			if (!owner) {
-				respond({ confirmed: false });
-				this.log(
-					sessionId,
-					"warn",
-					`Tool ${approval.toolName} rejected: no desktop approval surface is connected`,
-				);
-				return;
-			}
-			const presented = piToolPresentation(approval.toolName, approval.input);
-			const requestId = randomUUID();
-			live.pendingUi.add(request.id);
-			const pending: PendingToolApproval = {
-				item: {
-					requestId,
-					sessionId,
-					createdAt: new Date().toISOString(),
-					toolCallId: approval.toolCallId || request.id,
-					toolName: presented.toolName,
-					input: presented.input,
-				},
-				owner,
-				resolve: (result) => {
-					if (!live.pendingUi.has(request.id)) return;
-					respond({ confirmed: result.approved });
-				},
-			};
-			this.ctx.pendingApprovals.set(requestId, pending);
-			const items = [...this.ctx.pendingApprovals.values()]
-				.filter(
-					(entry) =>
-						entry.owner === owner && entry.item.sessionId === sessionId,
-				)
-				.map((entry) => entry.item);
-			sendEventToClient(this.ctx, owner, "tool_approval_state", {
-				sessionId,
-				items,
-			});
-			return;
-		}
 		switch (request.method) {
 			case "select":
 			case "input":

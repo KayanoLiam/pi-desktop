@@ -1624,16 +1624,6 @@ function ChatThreadPane({
 				: undefined,
 		[config.model, config.piThinkingLevel, config.provider, config.runtime],
 	);
-	const handleAutoApproveToolsChange = useCallback(
-		(autoApproveTools: boolean) =>
-			setConfig((prev) =>
-				prev.autoApproveTools === autoApproveTools
-					? prev
-					: { ...prev, autoApproveTools },
-			),
-		[setConfig],
-	);
-
 	const handleAttachFiles = useCallback(
 		(files: File[]) => {
 			const supportedFiles = files.filter((file) =>
@@ -2374,8 +2364,6 @@ function ChatThreadPane({
 	const composer = (
 		<ChatInputBar
 			runtime={isPiThread ? "pi" : "cline"}
-			autoApproveTools={config.autoApproveTools !== false}
-			onAutoApproveToolsChange={handleAutoApproveToolsChange}
 			piSelection={piSelection}
 			onPiSelectionChange={handlePiSelectionChange}
 			onCyclePiModel={() => void handleCyclePiModel()}
