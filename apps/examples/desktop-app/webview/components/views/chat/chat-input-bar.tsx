@@ -18,10 +18,6 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-	SpeechInput,
-	type SpeechTranscriptionSource,
-} from "@/components/ai-elements/speech-input";
 import { Button } from "@/components/ui/button";
 import {
 	Popover,
@@ -35,7 +31,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
 import { useWorkspace } from "@/contexts/workspace-context";
 import type { PromptInQueue } from "@/hooks/chat-session/types";
 import { formatCostUsd } from "@/hooks/use-session-history";
@@ -47,7 +42,7 @@ import type {
 } from "@/lib/chat-schema";
 import { imageFilesFromClipboard } from "@/lib/clipboard-images";
 import { cloudRepositoryLabel } from "@/lib/cloud-repositories";
-import { desktopClient, writeDesktopDebugLog } from "@/lib/desktop-client";
+import { desktopClient } from "@/lib/desktop-client";
 import {
 	buildModelPickerData,
 	type ModelPickerData,
@@ -75,13 +70,9 @@ import {
 	loadProviderModels,
 	subscribeToProviderCatalogInvalidation,
 	subscribeToProviderModels,
-	type TranscriptionModelTarget,
-	VOICE_INPUT_SETTINGS_CHANGED_EVENT,
 } from "@/lib/provider-model-catalog";
 import type { ProviderModel } from "@/lib/provider-schema";
 import { cn } from "@/lib/utils";
-import { startVercelStreamingTranscription } from "@/lib/vercel-streaming-transcription";
-import { MAX_RECORDED_AUDIO_BYTES } from "@/lib/voice-input-limits";
 import {
 	PI_CONFIG_CHANGED_EVENT,
 	type PiModelSelectionValue,
@@ -206,23 +197,6 @@ const PROMPT_INPUT_COLLAPSED_ROWS = 1;
 const PROMPT_INPUT_EXPANDED_ROWS = 2;
 const PROMPT_INPUT_MAX_ROWS = 5;
 const PROMPT_INPUT_LINE_HEIGHT_REM = 1.25;
-const AUDIO_BASE64_CHUNK_SIZE = 0x8000;
-
-async function blobToBase64(blob: Blob): Promise<string> {
-	const bytes = new Uint8Array(await blob.arrayBuffer());
-	let binary = "";
-	for (
-		let offset = 0;
-		offset < bytes.length;
-		offset += AUDIO_BASE64_CHUNK_SIZE
-	) {
-		binary += String.fromCharCode(
-			...bytes.subarray(offset, offset + AUDIO_BASE64_CHUNK_SIZE),
-		);
-	}
-	return window.btoa(binary);
-}
-
 function resolveEffortIndex(
 	thinking: ChatSessionConfig["thinking"],
 	reasoningEffort: ChatSessionConfig["reasoningEffort"],
@@ -457,10 +431,7 @@ function ChatInputBarImpl({
 	// Keystrokes only update this local state; the parent page tree is not
 	// re-rendered per keypress. External writers push text in via promptDraft.
 	const [promptInput, setPromptInputState] = useState(promptDraft.value);
-	const promptInputValueRef = useRef(promptDraft.value);
 	const appliedDraftVersionRef = useRef(promptDraft.version);
-	const latestDraftVersionRef = useRef(promptDraft.version);
-	latestDraftVersionRef.current = promptDraft.version;
 	const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
 	// The sidebar's "New" action asks the prompt input to grab focus through a
 	// window event (see lib/prompt-input-focus.ts).
@@ -471,33 +442,8 @@ function ChatInputBarImpl({
 			}),
 		[],
 	);
-	const batchTranscriptSessionRef = useRef<{
-		start: number;
-		end: number;
-		expectedValue: string;
-		draftVersion: number;
-		generation: number;
-	} | null>(null);
-	const speechRecognitionSessionRef = useRef<{
-		start: number;
-		end: number;
-		expectedValue: string;
-		draftVersion: number;
-		generation: number;
-	} | null>(null);
-	const streamingTranscriptRangeRef = useRef<{
-		start: number;
-		end: number;
-		expectedValue: string;
-		draftVersion: number;
-		generation: number;
-	} | null>(null);
-	const transcriptionGenerationRef = useRef(0);
-	const transcriptionTargetIdentityRef = useRef("unconfigured");
-	const transcriptionTargetStreamsRef = useRef(false);
 	const setPromptInput = useCallback(
 		(value: string) => {
-			promptInputValueRef.current = value;
 			setPromptInputState(value);
 			onPromptInputChange(value);
 		},
@@ -508,9 +454,6 @@ function ChatInputBarImpl({
 			return;
 		}
 		appliedDraftVersionRef.current = promptDraft.version;
-		batchTranscriptSessionRef.current = null;
-		speechRecognitionSessionRef.current = null;
-		streamingTranscriptRangeRef.current = null;
 		setPromptInput(promptDraft.value);
 	}, [promptDraft, setPromptInput]);
 	const isBusy =
@@ -518,9 +461,6 @@ function ChatInputBarImpl({
 	const canAbort =
 		status === "running" || status === "stopping" || hasRunningAgents;
 	const hasDraft = promptInput.trim().length > 0 || attachments.length > 0;
-	const [speechInputActive, setSpeechInputActive] = useState(false);
-	const speechInputActiveRef = useRef(false);
-	const [speechInputProcessing, setSpeechInputProcessing] = useState(false);
 
 	const [reasoningCapability, setReasoningCapability] = useState<{
 		provider: string;
@@ -632,7 +572,6 @@ function ChatInputBarImpl({
 			: undefined;
 	const canSend =
 		hasDraft &&
-		!speechInputActive &&
 		!needsCloudRepository &&
 		!readOnly &&
 		!needsPiModel &&
@@ -659,7 +598,7 @@ function ChatInputBarImpl({
 		}
 	};
 	const handleSend = useCallback(() => {
-		if (speechInputActive || readOnly || piCommandPending) return;
+		if (readOnly || piCommandPending) return;
 		if (unsupportedDraftImageCount > 0) {
 			reportUnsupportedImages();
 			return;
@@ -691,7 +630,6 @@ function ChatInputBarImpl({
 		onSend,
 		promptInput,
 		setPromptInput,
-		speechInputActive,
 		unsupportedDraftImageCount,
 		reportUnsupportedImages,
 	]);
@@ -729,26 +667,6 @@ function ChatInputBarImpl({
 		}
 	}, [isPiRuntime, thinkingPickerRequest]);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
-	const [transcriptionTarget, setTranscriptionTarget] =
-		useState<TranscriptionModelTarget | null>(null);
-	const updateTranscriptionTarget = useCallback(
-		(target: TranscriptionModelTarget | null) => {
-			const identity = target
-				? `${target.providerId}:${target.modelId}:${target.supportsStreaming ? "streaming" : "auto"}`
-				: "unconfigured";
-			transcriptionTargetStreamsRef.current =
-				target?.supportsStreaming ?? false;
-			if (identity !== transcriptionTargetIdentityRef.current) {
-				transcriptionTargetIdentityRef.current = identity;
-				transcriptionGenerationRef.current += 1;
-				batchTranscriptSessionRef.current = null;
-				speechRecognitionSessionRef.current = null;
-				streamingTranscriptRangeRef.current = null;
-			}
-			setTranscriptionTarget(target);
-		},
-		[],
-	);
 	const [promptInputFocused, setPromptInputFocused] = useState(false);
 	const [cursorIndex, setCursorIndex] = useState(() => promptInput.length);
 	// Mention/slash detection is derived synchronously from the input +
@@ -800,265 +718,6 @@ function ChatInputBarImpl({
 	);
 	const [slashLoading, setSlashLoading] = useState(false);
 	const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
-
-	useEffect(() => {
-		let cancelled = false;
-		let loadId = 0;
-		const loadVoiceInput = () => {
-			const currentLoadId = ++loadId;
-			loadProviderModelCatalog()
-				.then((catalog) => {
-					if (!cancelled && currentLoadId === loadId) {
-						updateTranscriptionTarget(catalog.voiceInput);
-					}
-				})
-				.catch(() => {
-					if (!cancelled && currentLoadId === loadId) {
-						updateTranscriptionTarget(null);
-					}
-				});
-		};
-		loadVoiceInput();
-		window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, loadVoiceInput);
-		return () => {
-			cancelled = true;
-			loadId += 1;
-			window.removeEventListener(
-				VOICE_INPUT_SETTINGS_CHANGED_EVENT,
-				loadVoiceInput,
-			);
-		};
-	}, [updateTranscriptionTarget]);
-
-	const handleTranscriptionChange = useCallback(
-		(
-			transcript: string,
-			source: SpeechTranscriptionSource = "media-recorder",
-		) => {
-			const text = transcript.trim();
-			const session =
-				source === "speech-recognition"
-					? speechRecognitionSessionRef.current
-					: batchTranscriptSessionRef.current;
-
-			if (source === "speech-recognition") {
-				// Browser speech recognition yields final chunks while the microphone
-				// remains open. Keep its insertion cursor alive across those chunks.
-				batchTranscriptSessionRef.current = null;
-			} else {
-				// A completed recording produces one batch result.
-				speechRecognitionSessionRef.current = null;
-				batchTranscriptSessionRef.current = null;
-			}
-			// Each result must belong to the draft captured when recording began.
-			// Batch snapshots are consumed once; browser recognition advances its
-			// cursor after each final chunk.
-			if (!text || !session) return;
-
-			const current = promptInputValueRef.current;
-			if (
-				session.generation !== transcriptionGenerationRef.current ||
-				session.draftVersion !== latestDraftVersionRef.current ||
-				session.expectedValue !== current
-			) {
-				return;
-			}
-			const insertionStart = session.start;
-			const insertionEnd = session.end;
-			const before = current.slice(0, insertionStart);
-			const after = current.slice(insertionEnd);
-			const leadingSpace = before.length > 0 && !/\s$/.test(before) ? " " : "";
-			const trailingSpace = after.length > 0 && !/^\s/.test(after) ? " " : "";
-			const insertedText = `${leadingSpace}${text}${trailingSpace}`;
-			const next = `${before}${insertedText}${after}`;
-			const nextCursor = before.length + insertedText.length;
-			if (source === "speech-recognition") {
-				speechRecognitionSessionRef.current = {
-					start: nextCursor,
-					end: nextCursor,
-					expectedValue: next,
-					draftVersion: session.draftVersion,
-					generation: session.generation,
-				};
-			}
-			setPromptInput(next);
-			requestAnimationFrame(() => {
-				const textarea = promptInputRef.current;
-				if (!textarea) return;
-				textarea.focus();
-				textarea.setSelectionRange(nextCursor, nextCursor);
-				setCursorIndex(nextCursor);
-			});
-		},
-		[setPromptInput],
-	);
-
-	const handleSpeechInputActiveChange = useCallback((active: boolean) => {
-		const wasActive = speechInputActiveRef.current;
-		speechInputActiveRef.current = active;
-		setSpeechInputActive(active);
-
-		if (!active) {
-			batchTranscriptSessionRef.current = null;
-			speechRecognitionSessionRef.current = null;
-			return;
-		}
-		if (wasActive || transcriptionTargetStreamsRef.current) return;
-
-		const current = promptInputValueRef.current;
-		const input = promptInputRef.current;
-		const start = input?.selectionStart ?? current.length;
-		const end = input?.selectionEnd ?? start;
-		const session = {
-			start,
-			end,
-			expectedValue: current,
-			draftVersion: latestDraftVersionRef.current,
-			generation: transcriptionGenerationRef.current,
-		};
-		// `auto` chooses browser speech recognition when available and falls back
-		// to MediaRecorder. Capture both session shapes until the result tells us
-		// which transport was selected.
-		batchTranscriptSessionRef.current = session;
-		speechRecognitionSessionRef.current = session;
-	}, []);
-
-	const handleStreamingTranscriptionStart = useCallback(() => {
-		const current = promptInputValueRef.current;
-		const input = promptInputRef.current;
-		const start = input?.selectionStart ?? current.length;
-		const end = input?.selectionEnd ?? start;
-		streamingTranscriptRangeRef.current = {
-			start,
-			end,
-			expectedValue: current,
-			draftVersion: latestDraftVersionRef.current,
-			generation: transcriptionGenerationRef.current,
-		};
-	}, []);
-
-	const handleStreamingTranscriptionChange = useCallback(
-		(transcript: string) => {
-			const text = transcript.trim();
-			const range = streamingTranscriptRangeRef.current;
-			if (!text || !range) return;
-
-			const current = promptInputValueRef.current;
-			// A live transcript range is only valid for the exact draft produced by
-			// its previous update. Refuse to apply stale numeric offsets if another
-			// writer changes the draft while the microphone is active.
-			if (
-				range.generation !== transcriptionGenerationRef.current ||
-				range.draftVersion !== latestDraftVersionRef.current ||
-				current !== range.expectedValue
-			) {
-				streamingTranscriptRangeRef.current = null;
-				return;
-			}
-			const before = current.slice(0, range.start);
-			const after = current.slice(range.end);
-			const leadingSpace = before.length > 0 && !/\s$/.test(before) ? " " : "";
-			const trailingSpace = after.length > 0 && !/^\s/.test(after) ? " " : "";
-			const insertion = `${leadingSpace}${text}${trailingSpace}`;
-			const next = `${before}${insertion}${after}`;
-			const nextEnd = range.start + insertion.length;
-			streamingTranscriptRangeRef.current = {
-				start: range.start,
-				end: nextEnd,
-				expectedValue: next,
-				draftVersion: range.draftVersion,
-				generation: range.generation,
-			};
-			setPromptInput(next);
-
-			requestAnimationFrame(() => {
-				const textarea = promptInputRef.current;
-				textarea?.focus();
-				textarea?.setSelectionRange(nextEnd, nextEnd);
-				setCursorIndex(nextEnd);
-			});
-		},
-		[setPromptInput],
-	);
-
-	const handleStreamingTranscriptionEnd = useCallback(() => {
-		streamingTranscriptRangeRef.current = null;
-	}, []);
-
-	const handleStartStreamingTranscription = useCallback(() => {
-		const generation = transcriptionGenerationRef.current;
-		return startVercelStreamingTranscription({
-			onTranscript: (transcript) => {
-				if (generation === transcriptionGenerationRef.current) {
-					handleStreamingTranscriptionChange(transcript);
-				}
-			},
-		});
-	}, [handleStreamingTranscriptionChange]);
-
-	const handleAudioRecorded = useCallback(
-		async (audioBlob: Blob): Promise<string> => {
-			if (!transcriptionTarget) {
-				throw new Error(
-					"Configure an audio-to-text provider before using speech input",
-				);
-			}
-			if (audioBlob.size > MAX_RECORDED_AUDIO_BYTES) {
-				throw new Error("Recorded audio exceeds the 25 MiB upload limit");
-			}
-			writeDesktopDebugLog({
-				scope: "voice-input",
-				level: "debug",
-				message: "Webview recorded audio and is sending it to the sidecar",
-				timestamp: new Date().toISOString(),
-				metadata: {
-					providerId: transcriptionTarget.providerId,
-					modelId: transcriptionTarget.modelId,
-					mediaType: audioBlob.type,
-					audioBytes: audioBlob.size,
-				},
-			});
-			const audioBase64 = await blobToBase64(audioBlob);
-			const result = await desktopClient.invoke<{ text?: string }>(
-				"transcribe_audio",
-				{
-					audioBase64,
-					mediaType: audioBlob.type,
-				},
-			);
-			const text = result.text?.trim();
-			if (!text) {
-				throw new Error("The transcription provider returned no text");
-			}
-			return text;
-		},
-		[transcriptionTarget],
-	);
-
-	const handleSpeechInputError = useCallback((error: unknown) => {
-		// Keep recording and provider failures in chat so the user can see
-		// the actual error and retry with their configured voice model.
-		const isMicrophoneError =
-			error instanceof DOMException || error instanceof Event;
-		const message =
-			error instanceof Error
-				? error.message
-				: "Check microphone permission and audio provider settings.";
-		writeDesktopDebugLog({
-			scope: "voice-input",
-			level: "error",
-			message: "Speech input failed in the webview",
-			timestamp: new Date().toISOString(),
-			metadata: { failure: message },
-		});
-		toast({
-			variant: "destructive",
-			title: "Speech input failed",
-			description: isMicrophoneError
-				? "Check the microphone permission for Pi and try again."
-				: message,
-		});
-	}, []);
 
 	const effortIndex = useMemo(
 		() => resolveEffortIndex(thinking, reasoningEffort),
@@ -1486,15 +1145,6 @@ function ChatInputBarImpl({
 							promptInputRef.current?.focus();
 						}}
 					>
-						{speechInputProcessing && (
-							<output
-								aria-live="polite"
-								className="flex shrink-0 items-center gap-1.5 self-center text-xs text-muted-foreground"
-							>
-								<Spinner className="size-3.5" />
-								<span className="sr-only">Transcribing voice input</span>
-							</output>
-						)}
 						<textarea
 							aria-activedescendant={
 								slashOpen && filteredSlashCommands.length > 0
@@ -1518,7 +1168,6 @@ function ChatInputBarImpl({
 								variant === "welcome" && "self-start",
 							)}
 							onChange={(e) => {
-								if (speechInputActive) return;
 								setPromptInput(e.target.value);
 								setCursorIndex(
 									e.target.selectionStart ?? e.target.value.length,
@@ -1629,7 +1278,6 @@ function ChatInputBarImpl({
 										handleSend();
 									} else if (
 										!hasDraft &&
-										!speechInputActive &&
 										!e.ctrlKey &&
 										!e.metaKey &&
 										!e.altKey &&
@@ -1645,21 +1293,19 @@ function ChatInputBarImpl({
 								)
 							}
 							placeholder={
-								speechInputProcessing
-									? "Transcribing voice input…"
-									: needsCloudRepository
-										? "Choose a repository"
-										: isBusy && variant !== "welcome"
-											? promptsInQueue.length > 0
-												? "Agent is working... submit to queue another message, or Enter to send the first message from the queue"
-												: "Agent is working... submit to queue another message"
-											: executionTarget === "cloud"
-												? "Describe what Pi should do in this repository."
-												: variant === "welcome"
-													? "Ask Pi to build, debug, or explore your code..."
-													: "Enter your question or type / for commands or @ for context"
+								needsCloudRepository
+									? "Choose a repository"
+									: isBusy && variant !== "welcome"
+										? promptsInQueue.length > 0
+											? "Agent is working... submit to queue another message, or Enter to send the first message from the queue"
+											: "Agent is working... submit to queue another message"
+										: executionTarget === "cloud"
+											? "Describe what Pi should do in this repository."
+											: variant === "welcome"
+												? "Ask Pi to build, debug, or explore your code..."
+												: "Enter your question or type / for commands or @ for context"
 							}
-							readOnly={speechInputActive || readOnly}
+							readOnly={readOnly}
 							ref={promptInputRef}
 							role="combobox"
 							rows={promptInputRows}
@@ -1697,34 +1343,6 @@ function ChatInputBarImpl({
 									<CircleStop className="size-3" />
 								</button>
 							)}
-							{/* The mic button only appears once a voice model is
-							    configured in Settings → Voice; unconfigured users
-							    don't get a dead control. */}
-							{transcriptionTarget ? (
-								<SpeechInput
-									key={`${transcriptionTarget.providerId}:${transcriptionTarget.modelId}:${transcriptionTarget.supportsStreaming ? "streaming" : "auto"}`}
-									onActiveChange={handleSpeechInputActiveChange}
-									onAudioRecorded={handleAudioRecorded}
-									onError={handleSpeechInputError}
-									onProcessingChange={setSpeechInputProcessing}
-									onStartStreaming={
-										transcriptionTarget.supportsStreaming
-											? handleStartStreamingTranscription
-											: undefined
-									}
-									onStreamingEnd={handleStreamingTranscriptionEnd}
-									onStreamingStart={handleStreamingTranscriptionStart}
-									onTranscriptionChange={
-										transcriptionTarget.supportsStreaming
-											? undefined
-											: handleTranscriptionChange
-									}
-									recordingMode={
-										transcriptionTarget.supportsStreaming ? "streaming" : "auto"
-									}
-									title={`${transcriptionTarget.supportsStreaming ? "Transcribe live" : "Transcribe"} with ${transcriptionTarget.providerName} / ${transcriptionTarget.modelName}`}
-								/>
-							) : null}
 							{(!isBusy || canSend) && (
 								<button
 									aria-label="Send message"

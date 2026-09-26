@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, type MouseEvent as ReactMouseEvent } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTINGS_SECTIONS } from "@/components/views/settings/sections";
 import { WorkspaceProvider } from "@/contexts/workspace-context";
 import { getInitialChatConfig } from "@/hooks/chat-session/constants";
 import type { ChatSessionStatus } from "@/lib/chat-schema";
@@ -21,18 +22,12 @@ const {
 	toastMock,
 	loadProviderModelCatalogMock,
 	loadProviderModelsMock,
-	speechInputMockState,
-	startVercelStreamingTranscriptionMock,
 	subscribeToProviderCatalogInvalidationMock,
 	subscribeToProviderModelsMock,
 } = vi.hoisted(() => ({
 	toastMock: vi.fn(),
 	loadProviderModelCatalogMock: vi.fn(),
 	loadProviderModelsMock: vi.fn(),
-	speechInputMockState: {
-		current: null as MockSpeechInputProps | null,
-	},
-	startVercelStreamingTranscriptionMock: vi.fn(),
 	subscribeToProviderCatalogInvalidationMock: vi.fn<
 		(listener: () => void) => () => void
 	>(() => vi.fn()),
@@ -43,57 +38,12 @@ const {
 	>(() => vi.fn()),
 }));
 
-type MockSpeechInputProps = {
-	disabled?: boolean;
-	onError?: (error: unknown) => void;
-	onActiveChange?: (active: boolean) => void;
-	onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-	onProcessingChange?: (processing: boolean) => void;
-	onStartStreaming?: () => Promise<unknown>;
-	onStreamingEnd?: () => void;
-	onStreamingStart?: () => void;
-	onTranscriptionChange?: (
-		transcript: string,
-		source?: "speech-recognition" | "media-recorder",
-	) => void;
-	recordingMode?: "auto" | "media-recorder" | "streaming";
-};
-
-vi.mock("@/components/ai-elements/speech-input", async () => {
-	const React = await vi.importActual<typeof import("react")>("react");
-	return {
-		SpeechInput: (props: MockSpeechInputProps) => {
-			speechInputMockState.current = props;
-			const [initialRecordingMode] = React.useState(props.recordingMode);
-			React.useEffect(() => {
-				props.onActiveChange?.(false);
-				props.onProcessingChange?.(false);
-			}, [props.onActiveChange, props.onProcessingChange]);
-			return (
-				<div data-initial-recording-mode={initialRecordingMode}>
-					<button
-						aria-label="Record speech"
-						disabled={props.disabled}
-						onClick={props.onClick}
-						type="button"
-					/>
-				</div>
-			);
-		},
-	};
-});
-
 vi.mock("@/lib/provider-model-catalog", () => ({
 	loadProviderModelCatalog: loadProviderModelCatalogMock,
 	loadProviderModels: loadProviderModelsMock,
 	subscribeToProviderCatalogInvalidation:
 		subscribeToProviderCatalogInvalidationMock,
 	subscribeToProviderModels: subscribeToProviderModelsMock,
-	VOICE_INPUT_SETTINGS_CHANGED_EVENT: "cline:test-voice-input-settings-changed",
-}));
-
-vi.mock("@/lib/vercel-streaming-transcription", () => ({
-	startVercelStreamingTranscription: startVercelStreamingTranscriptionMock,
 }));
 
 vi.mock("@/hooks/use-toast", () => ({ toast: toastMock }));
@@ -139,12 +89,6 @@ beforeEach(() => {
 		return undefined;
 	});
 	subscribeMock.mockReset().mockReturnValue(() => undefined);
-	speechInputMockState.current = null;
-	startVercelStreamingTranscriptionMock.mockReset().mockResolvedValue({
-		done: new Promise<void>(() => {}),
-		stop: vi.fn(),
-		cancel: vi.fn(),
-	});
 	subscribeToProviderCatalogInvalidationMock
 		.mockReset()
 		.mockReturnValue(vi.fn());
@@ -173,32 +117,6 @@ const workspaceValue = {
 	pickWorkspaceDirectory: vi.fn(async () => null),
 	selectChat: vi.fn(async () => true),
 };
-
-function providerCatalog(
-	voiceInput: {
-		providerId: string;
-		providerName: string;
-		modelId: string;
-		modelName: string;
-		supportsStreaming: boolean;
-	} | null,
-) {
-	return {
-		providers: [],
-		enabledProviderIds: ["cline"],
-		providerModels: { cline: ["test-model"] },
-		providerReasoningModels: { cline: [] },
-		voiceInput,
-	};
-}
-
-function deferred<T>() {
-	let resolve: (value: T) => void = () => {};
-	const promise = new Promise<T>((resolvePromise) => {
-		resolve = resolvePromise;
-	});
-	return { promise, resolve };
-}
 
 async function renderVoiceComposer({
 	attachments = [],
@@ -301,6 +219,33 @@ async function renderVoiceComposer({
 }
 
 describe("ChatInputBar", () => {
+	it("does not expose Voice settings or a microphone with a saved voice model", async () => {
+		loadProviderModelCatalogMock.mockResolvedValue({
+			providers: [],
+			enabledProviderIds: [],
+			providerModels: {},
+			providerReasoningModels: {},
+			voiceInput: {
+				providerId: "openai",
+				providerName: "OpenAI",
+				modelId: "whisper-1",
+				modelName: "Whisper",
+				supportsStreaming: false,
+			},
+		});
+		await renderVoiceComposer({ runtime: "pi", provider: "p", model: "m" });
+		expect(SETTINGS_SECTIONS).not.toContain("Voice");
+		expect(container.querySelector('[aria-label="Record speech"]')).toBeNull();
+		expect(container.querySelector('textarea[role="combobox"]')).not.toBeNull();
+		expect(
+			invokeMock.mock.calls.some(([command]) =>
+				["transcribe_audio", "create_streaming_transcription_session"].includes(
+					command,
+				),
+			),
+		).toBe(false);
+	});
+
 	it("sends Pi drafts through the Pi runtime once a model is selected", async () => {
 		const onSend = vi.fn();
 		const onPiSelectionChange = vi.fn();
@@ -1028,488 +973,6 @@ describe("ChatInputBar", () => {
 		expect(promptInput?.parentElement?.className).toContain("min-h-16");
 		expect(promptInput?.parentElement?.className).toContain("items-end");
 		expect(promptInput?.className).toContain("self-start");
-	});
-
-	it("protects the draft and send action for the full streaming transcription lifecycle", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "vercel-ai-gateway",
-				providerName: "Vercel AI Gateway",
-				modelId: "openai/gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: true,
-			}),
-		);
-		const onPromptInputChange = vi.fn();
-		const onSend = vi.fn();
-		await renderVoiceComposer({
-			onPromptInputChange,
-			onSend,
-			prompt: "alpha omega",
-		});
-
-		await vi.waitFor(() => {
-			expect(
-				container
-					.querySelector("[data-initial-recording-mode]")
-					?.getAttribute("data-initial-recording-mode"),
-			).toBe("streaming");
-		});
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(6, 6);
-		await act(async () => {
-			speechInputMockState.current?.onStreamingStart?.();
-			speechInputMockState.current?.onActiveChange?.(true);
-		});
-
-		const sendButton = container.querySelector<HTMLButtonElement>(
-			'[aria-label="Send message"]',
-		);
-		expect(textarea?.readOnly).toBe(true);
-		expect(sendButton?.disabled).toBe(true);
-		await act(async () => {
-			await speechInputMockState.current?.onStartStreaming?.();
-		});
-		const onTranscript = (
-			startVercelStreamingTranscriptionMock.mock.calls.at(-1)?.[0] as
-				| { onTranscript?: (text: string) => void }
-				| undefined
-		)?.onTranscript;
-		await act(async () => onTranscript?.("hello"));
-		expect(textarea?.value).toBe("alpha hello omega");
-
-		await act(async () => {
-			const setValue = Object.getOwnPropertyDescriptor(
-				HTMLTextAreaElement.prototype,
-				"value",
-			)?.set;
-			setValue?.call(textarea, "tampered draft");
-			textarea?.dispatchEvent(new Event("input", { bubbles: true }));
-		});
-		expect(onPromptInputChange).toHaveBeenLastCalledWith("alpha hello omega");
-		await act(async () => onTranscript?.("hello world"));
-		expect(textarea?.value).toBe("alpha hello world omega");
-
-		await renderVoiceComposer({
-			onPromptInputChange,
-			onSend,
-			prompt: "external replacement",
-			promptVersion: 1,
-		});
-		expect(textarea?.value).toBe("external replacement");
-		expect(textarea?.readOnly).toBe(true);
-		await act(async () => onTranscript?.("must not overwrite"));
-		expect(textarea?.value).toBe("external replacement");
-
-		await act(async () => {
-			textarea?.dispatchEvent(
-				new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
-			);
-			sendButton?.click();
-			speechInputMockState.current?.onProcessingChange?.(true);
-		});
-		expect(onSend).not.toHaveBeenCalled();
-		expect(
-			container.querySelector('output[aria-live="polite"]'),
-		).not.toBeNull();
-		expect(textarea?.placeholder).toBe("Transcribing voice input…");
-
-		await act(async () => {
-			speechInputMockState.current?.onStreamingEnd?.();
-			speechInputMockState.current?.onProcessingChange?.(false);
-			speechInputMockState.current?.onActiveChange?.(false);
-		});
-		expect(textarea?.readOnly).toBe(false);
-		expect(sendButton?.disabled).toBe(false);
-		await act(async () => sendButton?.click());
-		expect(onSend).toHaveBeenCalledWith("external replacement");
-	});
-
-	it("discards streaming updates after an equal-valued draft replacement", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "vercel-ai-gateway",
-				providerName: "Vercel AI Gateway",
-				modelId: "openai/gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: true,
-			}),
-		);
-		const onPromptInputChange = vi.fn();
-		await renderVoiceComposer({ onPromptInputChange });
-		await vi.waitFor(() =>
-			expect(speechInputMockState.current?.recordingMode).toBe("streaming"),
-		);
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		await act(async () => {
-			speechInputMockState.current?.onStreamingStart?.();
-			speechInputMockState.current?.onActiveChange?.(true);
-			await speechInputMockState.current?.onStartStreaming?.();
-		});
-		const onTranscript = (
-			startVercelStreamingTranscriptionMock.mock.calls.at(-1)?.[0] as
-				| { onTranscript?: (text: string) => void }
-				| undefined
-		)?.onTranscript;
-
-		await renderVoiceComposer({
-			onPromptInputChange,
-			prompt: "",
-			promptVersion: 1,
-		});
-		expect(textarea?.value).toBe("");
-		await act(async () => onTranscript?.("stale transcript"));
-
-		expect(textarea?.value).toBe("");
-		expect(onPromptInputChange).not.toHaveBeenCalledWith("stale transcript");
-	});
-
-	it("keeps the streaming draft identity across internal transcript updates", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "vercel-ai-gateway",
-				providerName: "Vercel AI Gateway",
-				modelId: "openai/gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: true,
-			}),
-		);
-		await renderVoiceComposer({ prompt: "alpha omega" });
-		await vi.waitFor(() =>
-			expect(speechInputMockState.current?.recordingMode).toBe("streaming"),
-		);
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(6, 6);
-		await act(async () => {
-			speechInputMockState.current?.onStreamingStart?.();
-			speechInputMockState.current?.onActiveChange?.(true);
-			await speechInputMockState.current?.onStartStreaming?.();
-		});
-		const onTranscript = (
-			startVercelStreamingTranscriptionMock.mock.calls.at(-1)?.[0] as
-				| { onTranscript?: (text: string) => void }
-				| undefined
-		)?.onTranscript;
-
-		await act(async () => onTranscript?.("hello"));
-		expect(textarea?.value).toBe("alpha hello omega");
-		await act(async () => onTranscript?.("hello world"));
-		expect(textarea?.value).toBe("alpha hello world omega");
-	});
-
-	it("adds browser speech-recognition chunks while recording remains active", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "openai-native",
-				providerName: "OpenAI",
-				modelId: "gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: false,
-			}),
-		);
-		await renderVoiceComposer({ prompt: "alpha omega" });
-
-		await vi.waitFor(() =>
-			expect(speechInputMockState.current?.recordingMode).toBe("auto"),
-		);
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(6, 6);
-		await act(async () => {
-			speechInputMockState.current?.onActiveChange?.(true);
-			speechInputMockState.current?.onTranscriptionChange?.(
-				"hello",
-				"speech-recognition",
-			);
-		});
-
-		expect(textarea?.readOnly).toBe(true);
-		expect(textarea?.value).toBe("alpha hello omega");
-
-		await act(async () => {
-			speechInputMockState.current?.onTranscriptionChange?.(
-				"world",
-				"speech-recognition",
-			);
-		});
-		expect(textarea?.value).toBe("alpha hello world omega");
-	});
-
-	it("discards a batch transcript after the draft lifecycle is replaced", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "openai-native",
-				providerName: "OpenAI",
-				modelId: "gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: false,
-			}),
-		);
-		const onPromptInputChange = vi.fn();
-		await renderVoiceComposer({
-			onPromptInputChange,
-			prompt: "alpha omega",
-		});
-
-		await vi.waitFor(() => {
-			expect(
-				container
-					.querySelector("[data-initial-recording-mode]")
-					?.getAttribute("data-initial-recording-mode"),
-			).toBe("auto");
-		});
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(6, 6);
-		await act(async () => {
-			speechInputMockState.current?.onActiveChange?.(true);
-		});
-
-		await renderVoiceComposer({
-			onPromptInputChange,
-			prompt: "external replacement",
-			promptVersion: 1,
-		});
-		expect(textarea?.value).toBe("external replacement");
-
-		await act(async () => {
-			speechInputMockState.current?.onTranscriptionChange?.("late transcript");
-		});
-		expect(textarea?.value).toBe("external replacement");
-		expect(onPromptInputChange).toHaveBeenLastCalledWith(
-			"external replacement",
-		);
-	});
-
-	it.each([
-		[
-			new Error("Transcription connection closed"),
-			"Transcription connection closed",
-		],
-		[
-			new DOMException("Permission denied", "NotAllowedError"),
-			"Check the microphone permission for Pi and try again.",
-		],
-	])("shows speech failures in chat with a configured model: %s", async (error, description) => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "openai-native",
-				providerName: "OpenAI",
-				modelId: "gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: false,
-			}),
-		);
-		await renderVoiceComposer({ prompt: "Keep my draft" });
-		await act(async () => {
-			speechInputMockState.current?.onError?.(error);
-		});
-		expect(toastMock).toHaveBeenCalledWith({
-			variant: "destructive",
-			title: "Speech input failed",
-			description,
-		});
-		expect(container.querySelector("textarea")?.value).toBe("Keep my draft");
-		expect(
-			container.querySelector('[aria-label="Record speech"]'),
-		).not.toBeNull();
-	});
-
-	it("inserts a batch transcript only into its captured draft range", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "openai-native",
-				providerName: "OpenAI",
-				modelId: "gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: false,
-			}),
-		);
-		await renderVoiceComposer({ prompt: "alpha omega" });
-
-		await vi.waitFor(() => {
-			expect(speechInputMockState.current?.recordingMode).toBe("auto");
-		});
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(6, 6);
-		await act(async () => {
-			speechInputMockState.current?.onActiveChange?.(true);
-			speechInputMockState.current?.onTranscriptionChange?.("hello");
-		});
-
-		expect(textarea?.value).toBe("alpha hello omega");
-		await act(async () => {
-			speechInputMockState.current?.onTranscriptionChange?.("replayed");
-		});
-		expect(textarea?.value).toBe("alpha hello omega");
-	});
-
-	it("discards a pending batch transcript when the voice target changes", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "openai-native",
-				providerName: "OpenAI",
-				modelId: "gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: false,
-			}),
-		);
-		await renderVoiceComposer({ prompt: "alpha omega" });
-
-		await vi.waitFor(() => {
-			expect(speechInputMockState.current?.recordingMode).toBe("auto");
-		});
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(6, 6);
-		await act(async () => {
-			speechInputMockState.current?.onActiveChange?.(true);
-		});
-		const staleBatchResult =
-			speechInputMockState.current?.onTranscriptionChange;
-
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "vercel-ai-gateway",
-				providerName: "Vercel AI Gateway",
-				modelId: "openai/gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: true,
-			}),
-		);
-		await act(async () => {
-			window.dispatchEvent(
-				new Event("cline:test-voice-input-settings-changed"),
-			);
-		});
-		await vi.waitFor(() => {
-			expect(speechInputMockState.current?.recordingMode).toBe("streaming");
-		});
-
-		await act(async () => staleBatchResult?.("late transcript"));
-		expect(textarea?.value).toBe("alpha omega");
-	});
-
-	it("ignores stale voice catalog responses and remounts when the recording mode changes", async () => {
-		const firstCatalog = deferred<ReturnType<typeof providerCatalog>>();
-		const refreshedCatalog = deferred<ReturnType<typeof providerCatalog>>();
-		loadProviderModelCatalogMock
-			.mockReset()
-			// ModelSelector loads the same catalog independently before the
-			// composer's voice-input effect runs.
-			.mockResolvedValueOnce(providerCatalog(null))
-			.mockReturnValueOnce(firstCatalog.promise)
-			.mockReturnValueOnce(refreshedCatalog.promise);
-		await renderVoiceComposer();
-
-		await act(async () => {
-			window.dispatchEvent(
-				new Event("cline:test-voice-input-settings-changed"),
-			);
-		});
-		expect(loadProviderModelCatalogMock).toHaveBeenCalledTimes(3);
-		await act(async () => {
-			refreshedCatalog.resolve(
-				providerCatalog({
-					providerId: "vercel-ai-gateway",
-					providerName: "Vercel AI Gateway",
-					modelId: "openai/gpt-4o-mini-transcribe",
-					modelName: "GPT-4o mini Transcribe",
-					supportsStreaming: true,
-				}),
-			);
-			await refreshedCatalog.promise;
-		});
-		await vi.waitFor(() => {
-			expect(
-				container
-					.querySelector("[data-initial-recording-mode]")
-					?.getAttribute("data-initial-recording-mode"),
-			).toBe("streaming");
-		});
-
-		await act(async () => {
-			firstCatalog.resolve(
-				providerCatalog({
-					providerId: "openai",
-					providerName: "OpenAI",
-					modelId: "whisper-1",
-					modelName: "Whisper",
-					supportsStreaming: false,
-				}),
-			);
-			await firstCatalog.promise;
-		});
-		expect(speechInputMockState.current?.recordingMode).toBe("streaming");
-		expect(
-			container
-				.querySelector("[data-initial-recording-mode]")
-				?.getAttribute("data-initial-recording-mode"),
-		).toBe("streaming");
-	});
-
-	it("ignores late transcripts from a session canceled by a provider change", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue(
-			providerCatalog({
-				providerId: "vercel-ai-gateway",
-				providerName: "Vercel AI Gateway",
-				modelId: "openai/gpt-4o-mini-transcribe",
-				modelName: "GPT-4o mini Transcribe",
-				supportsStreaming: true,
-			}),
-		);
-		await renderVoiceComposer({ prompt: "draft" });
-		await vi.waitFor(() =>
-			expect(speechInputMockState.current?.recordingMode).toBe("streaming"),
-		);
-		const textarea = container.querySelector<HTMLTextAreaElement>(
-			'textarea[role="combobox"]',
-		);
-		textarea?.setSelectionRange(5, 5);
-		await act(async () => {
-			speechInputMockState.current?.onStreamingStart?.();
-			speechInputMockState.current?.onActiveChange?.(true);
-			await speechInputMockState.current?.onStartStreaming?.();
-		});
-		const oldSessionTranscript = (
-			startVercelStreamingTranscriptionMock.mock.calls.at(-1)?.[0] as
-				| { onTranscript?: (text: string) => void }
-				| undefined
-		)?.onTranscript;
-		await act(async () => oldSessionTranscript?.("one"));
-		expect(textarea?.value).toBe("draft one");
-
-		loadProviderModelCatalogMock.mockResolvedValueOnce(
-			providerCatalog({
-				providerId: "openai",
-				providerName: "OpenAI",
-				modelId: "whisper-1",
-				modelName: "Whisper",
-				supportsStreaming: false,
-			}),
-		);
-		await act(async () => {
-			window.dispatchEvent(
-				new Event("cline:test-voice-input-settings-changed"),
-			);
-		});
-		await vi.waitFor(() =>
-			expect(speechInputMockState.current?.recordingMode).toBe("auto"),
-		);
-		await act(async () => oldSessionTranscript?.("late replacement"));
-
-		expect(textarea?.value).toBe("draft one");
 	});
 
 	it("preserves an explicit High selection across capability and status updates", async () => {

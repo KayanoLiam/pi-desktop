@@ -137,8 +137,6 @@ export function buildProviderModelCatalog(
 // Deduplicate concurrent requests and keep the response briefly so the app
 // boot issues a single round-trip instead of one per consumer.
 const PROVIDER_CATALOG_CACHE_TTL_MS = 5_000;
-export const VOICE_INPUT_SETTINGS_CHANGED_EVENT =
-	"cline:voice-input-settings-changed";
 
 let providerCatalogCache: {
 	fetchedAt: number;
@@ -238,13 +236,6 @@ export function writeProviderCatalogSnapshot(
 	snapshot: ProviderCatalogSnapshot,
 ): void {
 	providerCatalogSnapshot = snapshot;
-}
-
-export function notifyVoiceInputSettingsChanged(): void {
-	invalidateProviderCatalogCache();
-	if (typeof window !== "undefined") {
-		window.dispatchEvent(new Event(VOICE_INPUT_SETTINGS_CHANGED_EVENT));
-	}
 }
 
 export async function loadProviderModelCatalog(): Promise<ProviderModelCatalog> {

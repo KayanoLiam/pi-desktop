@@ -39,7 +39,6 @@ import {
 import {
 	fetchProviderCatalog,
 	invalidateProviderCatalogCache,
-	notifyVoiceInputSettingsChanged,
 	publishProviderModels,
 	subscribeToProviderCatalogInvalidation,
 } from "@/lib/provider-model-catalog";
@@ -71,7 +70,6 @@ import {
 import { RoutineSchedulesContent } from "./routine-view";
 import type { SettingsSection } from "./sections";
 import { toSettingsPatch } from "./settings-patch";
-import { VoiceInputContent } from "./voice-input-view";
 
 // Nav categories live in ./sections so the always-mounted sidebar can import
 // them without pulling this module graph into the initial bundle.
@@ -322,11 +320,9 @@ export function SettingsView({
 			);
 			const saved = await persistProviderSettings(id, { enabled: false });
 			if (saved) {
-				// Disconnecting removes the persisted entry (and the sidecar drops
-				// a voice-input selection pointing at it); reload so the view and
-				// the chat microphone reflect the real on-disk state.
+				// Disconnecting removes the persisted entry; reload so the view
+				// reflects the real on-disk state.
 				providerCatalogCache = null;
-				notifyVoiceInputSettingsChanged();
 				await loadProviderCatalog();
 			}
 		},
@@ -605,10 +601,6 @@ export function SettingsView({
 				{providerContent}
 				{addProviderDialog}
 			</>
-		) : activeNav === "Voice" ? (
-			<VoiceInputContent
-				onOpenModelProviders={() => onNavigateSection("API Providers")}
-			/>
 		) : activeNav === "Customize" ? (
 			<CustomizeView />
 		) : activeNav === "Channels" ? (

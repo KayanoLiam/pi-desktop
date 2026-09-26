@@ -11,7 +11,6 @@ import {
 	FolderTree,
 	GitFork,
 	Loader2,
-	Mic,
 	PanelLeftOpen,
 	Pencil,
 	Pin,
@@ -75,7 +74,6 @@ import {
 	SETTINGS_SECTIONS,
 	type SettingsSection,
 } from "@/components/views/settings/sections";
-import { useHasConnectedProvider } from "@/hooks/use-has-connected-provider";
 import type {
 	SessionThread,
 	UseSessionHistoryResult,
@@ -142,7 +140,6 @@ function hubPort(url: string | null): string | null {
 const SETTINGS_SECTION_ICONS = {
 	General: SlidersHorizontal,
 	"API Providers": Plug,
-	Voice: Mic,
 	Channels: Radio,
 	Schedules: Clock3,
 	Customize: Blocks,
@@ -167,14 +164,10 @@ function SettingsSectionNavigation({
 	collapsed: boolean;
 	onSelect: (section: SettingsSection) => void;
 }) {
-	// Voice input only works with a connected model provider, so its section
-	// stays disabled until one is set up (null = catalog still loading).
-	const hasConnectedProvider = useHasConnectedProvider();
 	const renderSectionButton = (section: SettingsSection) => {
 		const Icon = SETTINGS_SECTION_ICONS[section];
 		const label = settingsSectionLabel(section);
-		const disabled = section === "Voice" && hasConnectedProvider === false;
-		const button = (
+		return (
 			<Button
 				aria-current={activeSection === section ? "page" : undefined}
 				aria-label={label}
@@ -183,10 +176,8 @@ function SettingsSectionNavigation({
 					activeSection === section &&
 						"bg-surface-hover text-sidebar-foreground",
 					collapsed && "size-9 justify-center px-0",
-					disabled && !collapsed && "w-full",
 				)}
-				disabled={disabled}
-				key={disabled ? undefined : section}
+				key={section}
 				onClick={() => onSelect(section)}
 				title={label}
 				type="button"
@@ -195,20 +186,6 @@ function SettingsSectionNavigation({
 				<Icon className="size-4 shrink-0" />
 				{!collapsed ? <span className="truncate">{label}</span> : null}
 			</Button>
-		);
-		if (!disabled) {
-			return button;
-		}
-		// Disabled buttons swallow pointer events, so the explanation lives on
-		// a wrapping span for the native tooltip to work.
-		return (
-			<span
-				className={cn("block", collapsed && "flex w-full justify-start")}
-				key={section}
-				title="Configure a model provider to set up voice input"
-			>
-				{button}
-			</span>
 		);
 	};
 

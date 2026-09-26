@@ -1434,13 +1434,13 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn macos_bundle_declares_voice_input_permissions() {
+    fn macos_bundle_does_not_request_voice_input_permissions() {
         let info_plist = include_str!("../Info.plist");
-        assert!(info_plist.contains("<key>NSMicrophoneUsageDescription</key>"));
-        assert!(info_plist.contains("<key>NSSpeechRecognitionUsageDescription</key>"));
+        assert!(!info_plist.contains("<key>NSMicrophoneUsageDescription</key>"));
+        assert!(!info_plist.contains("<key>NSSpeechRecognitionUsageDescription</key>"));
 
         let entitlements = include_str!("../entitlements.plist");
-        assert!(entitlements.contains("<key>com.apple.security.device.audio-input</key>"));
+        assert!(!entitlements.contains("<key>com.apple.security.device.audio-input</key>"));
     }
 
     #[test]

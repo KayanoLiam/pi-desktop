@@ -190,7 +190,10 @@ describe("Pi thread command routing", () => {
 	it.each([
 		"list_importable_sessions",
 		"import_sessions",
-	])("rejects the removed Cline import command %s", async (command) => {
+		"create_streaming_transcription_session",
+		"transcribe_audio",
+		"save_voice_input_settings",
+	])("rejects the removed Cline command %s", async (command) => {
 		await expect(handleCommand(ctx, command)).rejects.toThrow(
 			`unsupported desktop command: ${command}`,
 		);

@@ -8,7 +8,6 @@
 const ALL_SETTINGS_SECTIONS = [
 	"General",
 	"API Providers",
-	"Voice",
 	"Channels",
 	"Schedules",
 ] as const;
