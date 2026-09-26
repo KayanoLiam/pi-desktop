@@ -188,14 +188,12 @@ import { SqliteSessionStore, resolveSessionBackend } from "@cline/core";
 const store = new SqliteSessionStore();
 ```
 
-### 5. Routine Schedules — Direct Hub Commands
+### 5. Scheduling
 
-Routine operations use the same connected Hub client as chat session
-observation. They never start a second in-process Hub:
-
-```typescript
-await ctx.hubClient.command("schedule.list", { limit: 200 });
-```
+The inherited Cline Hub schedule UI and desktop schedule-management commands
+have been removed. Pi session history does not poll Hub schedules. The shared
+Cline scheduler remains available to other clients; existing jobs and session
+provenance are not deleted.
 
 ### 6. Native Commands
 
@@ -267,7 +265,6 @@ Supported commands:
 | `respond_tool_approval` | In-memory promise resolution |
 | `poll_ask_questions` | In-memory pending map |
 | `respond_ask_question` | In-memory promise resolution |
-| `list_routine_schedules` | shared Hub schedule commands |
 | `list_user_instruction_configs` | Direct core API |
 | `pick_workspace_directory` | OS native dialog |
 | `open_mcp_settings_file` | OS `open` command |

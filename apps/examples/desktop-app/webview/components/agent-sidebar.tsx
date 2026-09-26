@@ -141,7 +141,6 @@ const SETTINGS_SECTION_ICONS = {
 	General: SlidersHorizontal,
 	"API Providers": Plug,
 	Channels: Radio,
-	Schedules: Clock3,
 	Customize: Blocks,
 } satisfies Record<SettingsSection, typeof Settings>;
 
@@ -202,13 +201,7 @@ function SettingsSectionNavigation({
 					Settings
 				</p>
 			) : null}
-			{/* Schedules and Extensions already have dedicated rows at the top of
-			    the expanded sidebar (Installed renders under Extensions), so this
-			    section nav skips them there. The collapsed sidebar keeps them
-			    reachable. */}
-			{SETTINGS_SECTIONS.filter(
-				(section) => collapsed || section !== "Schedules",
-			).map(renderSectionButton)}
+			{SETTINGS_SECTIONS.map(renderSectionButton)}
 			{collapsed ? (
 				<>
 					<div className="my-2 h-px w-6 shrink-0 bg-sidebar-border" />
@@ -297,7 +290,7 @@ export function AgentSidebar({
 	);
 	// Explicit expand/collapse choices per schedule group. Groups without an
 	// entry default to expanded only while they hold the active session, so a
-	// run opened from elsewhere (e.g. the Schedules settings page) is visible.
+	// run opened from elsewhere is visible.
 	const [scheduleGroupExpanded, setScheduleGroupExpanded] = useState<
 		Map<string, boolean>
 	>(() => new Map());
@@ -903,21 +896,6 @@ export function AgentSidebar({
 						>
 							<Clock3 className="size-4 shrink-0" />
 							<span className="truncate">Sessions</span>
-						</Button>
-						<Button
-							aria-label="Automations"
-							className={cn(
-								view === "settings" &&
-									settingsSection === "Schedules" &&
-									"bg-surface-hover text-sidebar-foreground",
-							)}
-							onClick={() => openSettingsSection("Schedules")}
-							title="Schedules"
-							type="button"
-							variant="sidebarItem"
-						>
-							<Clock3 className="size-4 shrink-0" />
-							<span className="truncate">Automations</span>
 						</Button>
 						<Button
 							aria-label="Extensions"

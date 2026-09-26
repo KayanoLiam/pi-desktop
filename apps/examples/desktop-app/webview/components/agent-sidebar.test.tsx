@@ -1100,7 +1100,6 @@ describe("AgentSidebar session organization", () => {
 		expect(rows.map((row) => row.textContent)).toEqual([
 			"New Session",
 			"Sessions",
-			"Automations",
 			"Extensions",
 		]);
 		for (const row of rows) {
@@ -1110,8 +1109,8 @@ describe("AgentSidebar session organization", () => {
 
 		await click(buttonWithText("New Session", actionsNav as ParentNode));
 		expect(onHome).toHaveBeenCalledOnce();
-		await click(buttonWithText("Automations", actionsNav as ParentNode));
-		expect(onSettingsSectionChange).toHaveBeenCalledWith("Schedules");
+		expect(container.querySelector('[aria-label="Automations"]')).toBeNull();
+		expect(container.textContent).not.toContain("Schedules");
 		await click(buttonWithText("Extensions", actionsNav as ParentNode));
 		expect(onSettingsSectionChange).toHaveBeenCalledWith("Customize");
 	});

@@ -869,7 +869,6 @@ export default function Home() {
 									<div className="absolute inset-0 z-30 bg-background text-foreground">
 										<SettingsView
 											onNavigateSection={handleSettingsSectionChange}
-											onOpenSession={handleOpenSessionById}
 											section={settingsSection}
 										/>
 									</div>

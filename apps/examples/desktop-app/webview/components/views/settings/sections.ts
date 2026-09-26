@@ -5,12 +5,7 @@
  * initial chat bundle. The heavy views load on demand via next/dynamic.
  */
 
-const ALL_SETTINGS_SECTIONS = [
-	"General",
-	"API Providers",
-	"Channels",
-	"Schedules",
-] as const;
+const ALL_SETTINGS_SECTIONS = ["General", "API Providers", "Channels"] as const;
 
 // The Extensions group shows the installed Pi extensions. Pi packages can be
 // browsed via the external link on that page; the old in-app marketplace is

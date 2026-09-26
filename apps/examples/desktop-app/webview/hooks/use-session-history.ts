@@ -54,12 +54,6 @@ export interface SessionThread {
 	scheduleRunNumber?: number;
 }
 
-/** What the schedule executions list knows about a session it started. */
-type ScheduledSessionLink = {
-	scheduleId?: string;
-	scheduleName?: string;
-};
-
 type SessionHookEvent = {
 	inputTokens?: number;
 	outputTokens?: number;
@@ -602,16 +596,6 @@ export function useSessionHistory({
 	const [requestedUsageIds, setRequestedUsageIds] = useState<Set<string>>(
 		() => new Set(),
 	);
-	// Sessions that schedule executions report as their own, keyed by session
-	// id. Scheduled runs executed by the local hub do not reliably carry the
-	// "hub-schedule" origin trigger in their session metadata (the runtime
-	// that claims the run doesn't always stamp provenance), so the metadata
-	// check alone would miss them; the executions list is the authoritative
-	// link. It also supplies the schedule id/name for sessions recorded
-	// before the runner stamped those into metadata.
-	const [scheduledSessionLinks, setScheduledSessionLinks] = useState<
-		Map<string, ScheduledSessionLink>
-	>(() => new Map());
 	const fetchLimitRef = useRef(INITIAL_HISTORY_FETCH_LIMIT);
 	// Limit of the most recent refresh that actually returned sessions. Failed
 	// attempts roll back to this rather than to a caller-local snapshot, which
@@ -673,91 +657,6 @@ export function useSessionHistory({
 			return next;
 		});
 	}, [activeSessionId]);
-
-	useEffect(() => {
-		let cancelled = false;
-		const collectScheduledSessionLinks = async () => {
-			const response = await desktopClient
-				.invoke<{
-					schedules?: Array<{ scheduleId?: unknown; name?: unknown }>;
-					activeExecutions?: Array<{
-						sessionId?: unknown;
-						scheduleId?: unknown;
-					}>;
-					lastExecutions?: Array<{
-						sessionId?: unknown;
-						scheduleId?: unknown;
-					}>;
-				}>("list_routine_schedules")
-				.catch(() => null);
-			if (cancelled || !response) {
-				return;
-			}
-			const scheduleNames = new Map<string, string>();
-			for (const schedule of response.schedules ?? []) {
-				const scheduleId =
-					typeof schedule?.scheduleId === "string"
-						? schedule.scheduleId.trim()
-						: "";
-				const name =
-					typeof schedule?.name === "string" ? schedule.name.trim() : "";
-				if (scheduleId && name) {
-					scheduleNames.set(scheduleId, name);
-				}
-			}
-			const links = new Map<string, ScheduledSessionLink>();
-			for (const execution of [
-				...(response.activeExecutions ?? []),
-				...(response.lastExecutions ?? []),
-			]) {
-				const sessionId =
-					typeof execution?.sessionId === "string"
-						? execution.sessionId.trim()
-						: "";
-				if (!sessionId) {
-					continue;
-				}
-				const scheduleId =
-					typeof execution?.scheduleId === "string"
-						? execution.scheduleId.trim()
-						: "";
-				links.set(sessionKey({ sessionId }), {
-					...(scheduleId ? { scheduleId } : {}),
-					...(scheduleId && scheduleNames.has(scheduleId)
-						? { scheduleName: scheduleNames.get(scheduleId) }
-						: {}),
-				});
-			}
-			setScheduledSessionLinks((current) => {
-				// Merge instead of replace: the executions list is a rolling
-				// window, so ids that fell out of it are still scheduled runs.
-				let changed = false;
-				const next = new Map(current);
-				for (const [sessionId, link] of links) {
-					const existing = next.get(sessionId);
-					if (
-						existing &&
-						existing.scheduleId === link.scheduleId &&
-						existing.scheduleName === link.scheduleName
-					) {
-						continue;
-					}
-					next.set(sessionId, link);
-					changed = true;
-				}
-				return changed ? next : current;
-			});
-		};
-		void collectScheduledSessionLinks();
-		const interval = window.setInterval(
-			() => void collectScheduledSessionLinks(),
-			2 * 60 * 1000,
-		);
-		return () => {
-			cancelled = true;
-			window.clearInterval(interval);
-		};
-	}, []);
 
 	const refreshSessions = useCallback(async () => {
 		// Reuse an in-flight refresh only when it already asked for at least as
@@ -1817,35 +1716,6 @@ export function useSessionHistory({
 		[sessions],
 	);
 
-	const threadsWithScheduled = useMemo(() => {
-		if (scheduledSessionLinks.size === 0) {
-			return threads;
-		}
-		return threads.map((thread) => {
-			const link = scheduledSessionLinks.get(thread.id);
-			if (!link) {
-				return thread;
-			}
-			// Metadata stamped by the runner wins; the executions list only
-			// fills in what the session record itself doesn't carry.
-			const scheduleId = thread.scheduleId ?? link.scheduleId;
-			const scheduleName = thread.scheduleName ?? link.scheduleName;
-			if (
-				thread.isScheduled &&
-				scheduleId === thread.scheduleId &&
-				scheduleName === thread.scheduleName
-			) {
-				return thread;
-			}
-			return {
-				...thread,
-				isScheduled: true,
-				...(scheduleId ? { scheduleId } : {}),
-				...(scheduleName ? { scheduleName } : {}),
-			};
-		});
-	}, [scheduledSessionLinks, threads]);
-
 	return {
 		getSessionByThreadId,
 		hasLoadedHistory,
@@ -1864,7 +1734,7 @@ export function useSessionHistory({
 		forkThread,
 		sessionById,
 		sessions,
-		threads: threadsWithScheduled,
+		threads,
 		unreadSessionIds,
 	};
 }

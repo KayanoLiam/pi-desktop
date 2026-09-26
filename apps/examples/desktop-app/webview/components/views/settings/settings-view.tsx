@@ -67,7 +67,6 @@ import {
 	ProviderDetailContent,
 	ProviderListContent,
 } from "./provider-list-view";
-import { RoutineSchedulesContent } from "./routine-view";
 import type { SettingsSection } from "./sections";
 import { toSettingsPatch } from "./settings-patch";
 
@@ -99,11 +98,9 @@ let providerCatalogCache: {
 export function SettingsView({
 	section,
 	onNavigateSection,
-	onOpenSession,
 }: {
 	section: SettingsSection;
 	onNavigateSection: (section: SettingsSection) => void;
-	onOpenSession?: (sessionId: string) => void | Promise<void>;
 }) {
 	const activeNav = section;
 	const [providers, setProviders] = useState<Provider[]>(
@@ -605,8 +602,6 @@ export function SettingsView({
 			<CustomizeView />
 		) : activeNav === "Channels" ? (
 			<ChannelsContent />
-		) : activeNav === "Schedules" ? (
-			<RoutineSchedulesContent onOpenSession={onOpenSession} />
 		) : activeNav === "General" ? (
 			<GeneralSettingsContent
 				onOpenModelProviders={() => onNavigateSection("API Providers")}

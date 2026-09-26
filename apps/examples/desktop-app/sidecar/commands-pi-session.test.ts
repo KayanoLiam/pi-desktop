@@ -193,6 +193,13 @@ describe("Pi thread command routing", () => {
 		"create_streaming_transcription_session",
 		"transcribe_audio",
 		"save_voice_input_settings",
+		"list_routine_schedules",
+		"create_routine_schedule",
+		"update_routine_schedule",
+		"pause_routine_schedule",
+		"resume_routine_schedule",
+		"trigger_routine_schedule",
+		"delete_routine_schedule",
 	])("rejects the removed Cline command %s", async (command) => {
 		await expect(handleCommand(ctx, command)).rejects.toThrow(
 			`unsupported desktop command: ${command}`,

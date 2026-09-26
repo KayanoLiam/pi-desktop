@@ -651,12 +651,15 @@ Desktop transport envelope:
 - Response: `{ "type": "response", "id": string, "ok": boolean, "result"?: unknown, "error"?: string }`
 - Event: `{ "type": "event", "event": { "name": string, "payload": unknown } }`
 
-## Settings: Routine
+## Scheduling
 
-- The Settings sidebar includes a `Routine` view for hub-backed automations.
-- `Routine` lists all RPC schedules and shows status (`enabled`, `nextRunAt`, active execution).
-- From the UI you can open a create form and add, pause/resume, trigger-now, and delete schedules.
-- The view is wired to the same scheduler APIs used by `cline schedule` through Tauri commands and `scripts/routine-schedules.ts`.
+Pi desktop does not expose the inherited Cline Hub Automations/Schedule page
+or its schedule-management commands. Session history no longer polls the Hub
+for scheduled executions. Existing session provenance remains readable.
+
+This UI removal does not cancel jobs managed by other Cline clients. Manage
+any existing Hub schedules through those clients; the shared scheduler and
+its stored data are unchanged.
 
 ## Key Files
 
@@ -671,7 +674,6 @@ Desktop transport envelope:
 - [`webview/lib/desktop-client.ts`](./webview/lib/desktop-client.ts) - typed desktop websocket client
 - [`webview/hooks/use-chat-session.ts`](./webview/hooks/use-chat-session.ts) - UI chat session state + backend subscriptions
 - [`webview/lib/chat-schema.ts`](./webview/lib/chat-schema.ts) - chat message schema used by the UI
-- [`webview/components/views/settings/routine-view.tsx`](./webview/components/views/settings/routine-view.tsx) - Routine schedules UI
 
 ## Data + Storage
 

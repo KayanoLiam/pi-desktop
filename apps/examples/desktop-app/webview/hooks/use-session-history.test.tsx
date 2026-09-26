@@ -110,6 +110,18 @@ afterEach(async () => {
 });
 
 describe("useSessionHistory session mapping", () => {
+	it("does not request the removed Hub schedules endpoint", async () => {
+		await act(async () => {
+			root.render(<HookHarness />);
+		});
+		await flush();
+		expect(
+			invokeMock.mock.calls.some(
+				([command]) => command === "list_routine_schedules",
+			),
+		).toBe(false);
+	});
+
 	it("keeps duplicate IDs visible and renames only the selected environment", async () => {
 		await act(async () => {
 			root.render(<HookHarness />);
@@ -186,70 +198,6 @@ describe("useSessionHistory session mapping", () => {
 				(thread) => thread.id === sessionKey({ sessionId: "regular-session" }),
 			),
 		).toMatchObject({ source: "core", isScheduled: false });
-	});
-
-	it("marks sessions scheduled when a schedule execution names them", async () => {
-		// Scheduled runs executed by the local hub don't reliably stamp the
-		// hub-schedule trigger into session metadata, so the executions list
-		// is the fallback signal.
-		invokeMock.mockImplementation(
-			async (command: string, args?: { limit?: number }) => {
-				if (command === "list_discovered_sessions") {
-					return await new Promise<unknown[]>((resolve, reject) => {
-						pendingLists.push({ limit: args?.limit ?? 0, resolve, reject });
-					});
-				}
-				if (command === "list_routine_schedules") {
-					return {
-						schedules: [{ scheduleId: "sched_daily", name: "Daily report" }],
-						activeExecutions: [{ sessionId: "cron-active" }],
-						lastExecutions: [
-							{ sessionId: "cron-session", scheduleId: "sched_daily" },
-							{},
-						],
-					};
-				}
-				return [];
-			},
-		);
-
-		await act(async () => {
-			root.render(<HookHarness />);
-		});
-		await flush();
-
-		await act(async () => {
-			pendingLists[0].resolve([
-				{
-					...sessionRow("cron-session"),
-					source: "core",
-					metadata: { sessionHistoryOrigin: { mode: "user" } },
-				},
-				{
-					...sessionRow("regular-session"),
-					source: "core",
-					metadata: { sessionHistoryOrigin: { mode: "user" } },
-				},
-			]);
-			await Promise.resolve();
-		});
-
-		// The executions list also supplies the schedule identity the session
-		// record itself lacks, so the sidebar can group it with its siblings.
-		expect(
-			current.threads.find(
-				(thread) => thread.id === sessionKey({ sessionId: "cron-session" }),
-			),
-		).toMatchObject({
-			isScheduled: true,
-			scheduleId: "sched_daily",
-			scheduleName: "Daily report",
-		});
-		expect(
-			current.threads.find(
-				(thread) => thread.id === sessionKey({ sessionId: "regular-session" }),
-			),
-		).toMatchObject({ isScheduled: false });
 	});
 
 	it("maps the runner's schedule provenance onto sidebar threads", async () => {
