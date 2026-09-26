@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
+import { describeChatError } from "@/lib/chat-error";
 import type {
 	ChatMessage,
 	ChatMessageImage,
@@ -30,6 +31,7 @@ import type {
 import type { SessionImportTool } from "@/lib/session-import";
 import { cn } from "@/lib/utils";
 import { ImportedSessionNotice } from "./imported-session-notice";
+import { ChatErrorNotice } from "./messages/chat-error-notice";
 import { STREAMING_TITLE_CLASS } from "./messages/constants";
 import {
 	buildPreviousTimestampMap,
@@ -154,6 +156,15 @@ function ChatMessagesImpl({
 	const shouldShowErrorBanner =
 		Boolean(error) &&
 		(Boolean(errorAction) || lastErrorMessage?.content !== error);
+	const errorActionButton = errorAction ? (
+		<Button
+			onClick={() => void errorAction.onClick()}
+			size="sm"
+			variant="outline"
+		>
+			{errorAction.label}
+		</Button>
+	) : null;
 	const lastToolInProgress = useMemo(
 		() =>
 			lastConversationMessage?.role === "tool" &&
@@ -778,19 +789,19 @@ function ChatMessagesImpl({
 							</div>
 						) : null}
 						{shouldShowErrorBanner ? (
-							<div className="cline-chat-selectable mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-								{lastErrorMessage?.content !== error ? <p>{error}</p> : null}
-								{errorAction ? (
-									<Button
-										className="mt-2"
-										onClick={() => void errorAction.onClick()}
-										size="sm"
-										variant="outline"
-									>
-										{errorAction.label}
-									</Button>
-								) : null}
-							</div>
+							// The transcript already shows this error as a notice card;
+							// only its recovery action is added then.
+							error && lastErrorMessage?.content !== error ? (
+								<ChatErrorNotice
+									action={errorActionButton}
+									className="mt-4"
+									detail={error}
+									role="alert"
+									summary={describeChatError(error)}
+								/>
+							) : (
+								<div className="mt-4">{errorActionButton}</div>
+							)
 						) : null}
 					</SessionContent>
 				</ConversationContent>

@@ -2317,3 +2317,48 @@ describe("ChatMessages credential failures", () => {
 		expect(onFixCredentials).toHaveBeenCalledWith("models");
 	});
 });
+
+describe("ChatMessages error notices", () => {
+	const dropped: ChatMessage = {
+		id: "error-dropped",
+		sessionId: "session-1",
+		role: "error",
+		content: "terminated",
+		createdAt: 2,
+	};
+
+	it("shows a failed turn as a notice card with the raw error kept verbatim", async () => {
+		const writeText = vi.fn(async () => undefined);
+		Object.assign(navigator, { clipboard: { writeText } });
+		await renderMessages([dropped], { status: "failed" });
+
+		const notice = container.querySelector(
+			'.cline-chat-message[data-role="error"] [data-slot="chat-error-notice"]',
+		);
+		expect(notice?.textContent).toContain("Connection interrupted");
+		expect(notice?.textContent).toContain("closed before the reply finished");
+		expect(notice?.querySelector("pre")?.textContent).toBe("terminated");
+		// Not wrapped in the shared message-content bubble (the red block).
+		expect(container.querySelector(".cline-chat-message-content")).toBeNull();
+
+		const copy = notice?.querySelector<HTMLButtonElement>(
+			'button[aria-label="Copy error"]',
+		);
+		await act(async () => copy?.click());
+		expect(writeText).toHaveBeenCalledWith("terminated");
+	});
+
+	it("uses the same card for an error banner that is not in the transcript", async () => {
+		await renderMessages([], {
+			error: "Request failed with status code 429",
+			status: "failed",
+		});
+
+		const banner = container.querySelector('[role="alert"]');
+		expect(banner?.getAttribute("data-slot")).toBe("chat-error-notice");
+		expect(banner?.textContent).toContain("Rate limited");
+		expect(banner?.textContent).toContain(
+			"Request failed with status code 429",
+		);
+	});
+});

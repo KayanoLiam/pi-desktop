@@ -19,6 +19,7 @@ import {
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { resolveCredentialFailureAction } from "@/hooks/chat-session/helpers";
+import { describeChatError } from "@/lib/chat-error";
 import type {
 	ChatMessage,
 	ChatMessageImage,
@@ -27,6 +28,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { MemoizedMarkdown } from "../../../ui/markdown";
 import { formatChatMessageContent } from "../message-content";
+import { ChatErrorNotice } from "./chat-error-notice";
 import { isSystemSteeringMessage } from "./group-messages";
 import { MessageImageCarousel } from "./image-carousel";
 import { ReasoningBlock } from "./reasoning-block";
@@ -181,7 +183,6 @@ export const MessageBubble = memo(function MessageBubble({
 	const shouldRenderAssistantActions =
 		message.role === "assistant" &&
 		!isStreaming &&
-		!isError &&
 		Boolean(displayContent.trim()) &&
 		Boolean(onCopyMessage || onForkSession);
 	const shouldRenderUserActions =
@@ -198,6 +199,41 @@ export const MessageBubble = memo(function MessageBubble({
 		Boolean(editError);
 	const keepAssistantActionsVisible =
 		isLastAssistantMessage || forkPending || Boolean(forkError);
+
+	// A failed turn is a notice card, not a bubble: the card sits directly in
+	// the message row, outside `MessageContent`, so the shared red bubble
+	// style for `data-role="error"` never applies.
+	if (isError) {
+		return (
+			<AgentMessage
+				className={cn("relative flex flex-col", followsWorkingRows && "-mt-2")}
+				from={agentRole}
+			>
+				<ChatErrorNotice
+					action={
+						credentialAction ? (
+							<Button
+								onClick={() => onFixCredentials?.(credentialAction.target)}
+								size="sm"
+								type="button"
+								variant="outline"
+							>
+								{credentialAction.label}
+							</Button>
+						) : null
+					}
+					copied={wasCopied}
+					detail={displayContent}
+					onCopy={
+						onCopyMessage
+							? () => void onCopyMessage(message.id, displayContent)
+							: undefined
+					}
+					summary={describeChatError(displayContent, message.meta)}
+				/>
+			</AgentMessage>
+		);
+	}
 
 	const messageDate = new Date(message.createdAt);
 	const hasValidMessageDate = !Number.isNaN(messageDate.getTime());
@@ -256,19 +292,6 @@ export const MessageBubble = memo(function MessageBubble({
 							content={displayContent}
 							streaming={isStreaming && message.role === "assistant"}
 						/>
-					</div>
-				) : null}
-
-				{credentialAction ? (
-					<div>
-						<Button
-							onClick={() => onFixCredentials?.(credentialAction.target)}
-							size="sm"
-							type="button"
-							variant="outline"
-						>
-							{credentialAction.label}
-						</Button>
 					</div>
 				) : null}
 			</MessageContent>
