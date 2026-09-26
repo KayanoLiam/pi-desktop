@@ -837,14 +837,22 @@ describe("PiSessionManager", () => {
 	});
 
 	it("holds prompts sent during a turn and sends them in order once Pi settles", async () => {
-		createManager({ promptEvents: slowTurnEvents() });
+		// A long first turn, so it is still running when the queue is checked
+		// even on a loaded machine.
+		createManager({ promptEvents: slowTurnEvents({ ticks: 20 }) });
 		await startSession("s-queue");
 		const first = manager.handle({
 			action: "send",
 			sessionId: "s-queue",
 			prompt: "first",
 		});
-		await waitFor(() => manager.status("s-queue") === "running");
+		// "running" is set as the prompt is written; wait until the fake has
+		// actually read it before checking what Pi received.
+		await waitFor(
+			() =>
+				manager.status("s-queue") === "running" &&
+				receivedPrompts().length === 1,
+		);
 		const second = (await manager.handle({
 			action: "send",
 			sessionId: "s-queue",
@@ -867,6 +875,7 @@ describe("PiSessionManager", () => {
 			prompt: "third",
 		});
 		// Nothing reaches Pi's own follow-up queue while the first turn runs.
+		expect(manager.status("s-queue")).toBe("running");
 		expect(receivedPrompts().map((line) => line.message)).toEqual(["first"]);
 		await first;
 		await waitFor(() => chunkJson("chat_done").length === 3);
