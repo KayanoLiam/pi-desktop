@@ -114,7 +114,7 @@ describe("SettingsView cloud sessions rollout", () => {
 		{
 			caseName: "the rollout explicitly enables it",
 			featureFlags: { cloudAgents: false, cloudAgentsAvailable: true },
-			visible: true,
+			visible: false,
 		},
 		{
 			caseName: "feature flags are unavailable",
@@ -151,5 +151,41 @@ describe("SettingsView cloud sessions rollout", () => {
 				) !== null,
 			).toBe(visible),
 		);
+	});
+});
+
+describe("General Pi settings", () => {
+	it("keeps desktop preferences without loading legacy Cline settings", async () => {
+		await act(async () => {
+			root.render(
+				<SettingsView onNavigateSection={vi.fn()} section="General" />,
+			);
+		});
+		for (const label of [
+			"Desktop notifications",
+			"Dark mode",
+			"Font size",
+			"Accent color",
+			"App icon",
+			"About",
+		])
+			expect(container.textContent).toContain(label);
+		for (const label of [
+			"Web search",
+			"Keep CLI up to date",
+			"Telemetry",
+			"Cloud sessions",
+			"beta channel",
+		])
+			expect(container.textContent).not.toContain(label);
+		expect(
+			invoke.mock.calls.some(([command]) =>
+				[
+					"get_global_settings",
+					"get_desktop_settings",
+					"get_feature_flags",
+				].includes(command),
+			),
+		).toBe(false);
 	});
 });

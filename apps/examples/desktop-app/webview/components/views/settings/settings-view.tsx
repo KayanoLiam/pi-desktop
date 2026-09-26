@@ -1,4 +1,3 @@
-import { providerOffersModelTool } from "@cline/llms/browser";
 import { Switch } from "@cline/ui";
 import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -37,10 +36,8 @@ import {
 	isProviderConnected,
 } from "@/lib/provider-connection";
 import {
-	fetchProviderCatalog,
 	invalidateProviderCatalogCache,
 	publishProviderModels,
-	subscribeToProviderCatalogInvalidation,
 } from "@/lib/provider-model-catalog";
 import type {
 	Provider,
@@ -77,12 +74,6 @@ export {
 	SETTINGS_SECTIONS,
 	type SettingsSection,
 } from "./sections";
-
-type GlobalSettingsResponse = {
-	telemetryOptOut: boolean;
-	autoUpdateEnabled: boolean;
-	tools?: Partial<Record<"web_search", { enabled: boolean }>>;
-};
 
 const PROVIDER_CATALOG_CACHE_TTL_MS = 60_000;
 
@@ -603,9 +594,7 @@ export function SettingsView({
 		) : activeNav === "Channels" ? (
 			<ChannelsContent />
 		) : activeNav === "General" ? (
-			<GeneralSettingsContent
-				onOpenModelProviders={() => onNavigateSection("API Providers")}
-			/>
+			<GeneralSettingsContent />
 		) : (
 			<div className="flex h-full items-center justify-center">
 				<p className="text-sm text-muted-foreground">
@@ -636,11 +625,7 @@ const ACCENT_OPTIONS: { id: HubAccent; label: string; swatch: string }[] = [
 	{ id: "ember", label: "Ember", swatch: "oklch(0.6 0.19 33)" },
 ];
 
-function GeneralSettingsContent({
-	onOpenModelProviders,
-}: {
-	onOpenModelProviders: () => void;
-}) {
+function GeneralSettingsContent() {
 	const [theme, setTheme] = useState<HubTheme>(() => {
 		if (typeof window === "undefined") return "light";
 		return readStoredHubTheme() ?? readSystemHubTheme();
@@ -662,86 +647,10 @@ function GeneralSettingsContent({
 	>("desktop");
 	const [appIconError, setAppIconError] = useState<string | null>(null);
 	const appIconRequestRef = useRef(0);
-	const [telemetryOptOut, setTelemetryOptOut] = useState(false);
-	const [telemetryLoading, setTelemetryLoading] = useState(true);
-	const [telemetrySaving, setTelemetrySaving] = useState(false);
-	const [telemetryError, setTelemetryError] = useState<string | null>(null);
-	const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
-	const [autoUpdateLoading, setAutoUpdateLoading] = useState(true);
-	const [autoUpdateSaving, setAutoUpdateSaving] = useState(false);
-	const [autoUpdateError, setAutoUpdateError] = useState<string | null>(null);
-	const [cloudSessionsEnabled, setCloudSessionsEnabled] = useState(false);
-	const [cloudSessionsLoading, setCloudSessionsLoading] = useState(true);
-	const [cloudSessionsSaving, setCloudSessionsSaving] = useState(false);
-	const [cloudSessionsError, setCloudSessionsError] = useState<string | null>(
-		null,
-	);
-	// The environment override can differ from the stored opt-in.
-	const [cloudSessionsEffective, setCloudSessionsEffective] = useState<
-		boolean | null
-	>(null);
-	// Keep the preview hidden until the rollout service explicitly enables it.
-	const [cloudSessionsAvailable, setCloudSessionsAvailable] = useState(false);
-
-	const refreshCloudSessionsEffective = useCallback(async () => {
-		try {
-			const flags = await desktopClient.invoke<{
-				cloudAgents?: boolean;
-				cloudAgentsAvailable?: boolean;
-			}>("get_feature_flags");
-			setCloudSessionsEffective(Boolean(flags.cloudAgents));
-			setCloudSessionsAvailable(flags.cloudAgentsAvailable === true);
-		} catch {
-			setCloudSessionsEffective(null);
-			setCloudSessionsAvailable(false);
-		}
-	}, []);
-	const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-	const [webSearchLoading, setWebSearchLoading] = useState(true);
-	const [webSearchSaving, setWebSearchSaving] = useState(false);
-	const [webSearchError, setWebSearchError] = useState<string | null>(null);
-	// Connected providers that offer native web search; null until the
-	// catalog loads. The toggle silently does nothing with other providers,
-	// so the row spells out whether it will actually take effect.
-	const [webSearchReadyProviders, setWebSearchReadyProviders] = useState<
-		string[] | null
-	>(null);
 	const [appVersion, setAppVersion] = useState<string | null>(null);
 
 	useEffect(() => setAppIconLocation(appIconSurface(navigator.userAgent)), []);
 	useEffect(() => subscribeToAppFontSize(setFontSize), []);
-
-	useEffect(() => {
-		let cancelled = false;
-		const loadWebSearchSupport = () => {
-			void fetchProviderCatalog()
-				.then((payload) => {
-					if (cancelled) return;
-					setWebSearchReadyProviders(
-						(payload.providers ?? [])
-							.filter(
-								(provider) =>
-									provider.enabled &&
-									providerOffersModelTool(provider.id, "web_search"),
-							)
-							.map((provider) => provider.name),
-					);
-				})
-				.catch(() => {
-					// Support status is best-effort; the toggle works without it.
-				});
-		};
-		loadWebSearchSupport();
-		// Provider saves invalidate the catalog cache when they complete, so
-		// refetching on invalidation keeps the status current even when the
-		// user navigates here while a save is still in flight.
-		const unsubscribe =
-			subscribeToProviderCatalogInvalidation(loadWebSearchSupport);
-		return () => {
-			cancelled = true;
-			unsubscribe();
-		};
-	}, []);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -764,143 +673,6 @@ function GeneralSettingsContent({
 			cancelled = true;
 		};
 	}, []);
-
-	const loadGlobalSettings = useCallback(async () => {
-		setTelemetryLoading(true);
-		setTelemetryError(null);
-		setAutoUpdateLoading(true);
-		setAutoUpdateError(null);
-		setWebSearchLoading(true);
-		setWebSearchError(null);
-		setCloudSessionsLoading(true);
-		setCloudSessionsError(null);
-		await Promise.all([
-			(async () => {
-				try {
-					const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-						"get_global_settings",
-					);
-					setTelemetryOptOut(settings.telemetryOptOut);
-					setAutoUpdateEnabled(settings.autoUpdateEnabled);
-					setWebSearchEnabled(settings.tools?.web_search?.enabled === true);
-				} catch (error) {
-					const message =
-						error instanceof Error ? error.message : String(error);
-					setTelemetryError(message);
-					setAutoUpdateError(message);
-					setWebSearchError(message);
-				} finally {
-					setTelemetryLoading(false);
-					setAutoUpdateLoading(false);
-					setWebSearchLoading(false);
-				}
-			})(),
-			(async () => {
-				try {
-					const desktopSettings = await desktopClient.invoke<{
-						cloudSessionsEnabled: boolean;
-					}>("get_desktop_settings");
-					setCloudSessionsEnabled(
-						Boolean(desktopSettings.cloudSessionsEnabled),
-					);
-				} catch (error) {
-					setCloudSessionsError(
-						error instanceof Error ? error.message : String(error),
-					);
-				} finally {
-					setCloudSessionsLoading(false);
-				}
-			})(),
-			refreshCloudSessionsEffective(),
-		]);
-	}, [refreshCloudSessionsEffective]);
-
-	useEffect(() => {
-		const timeoutId = window.setTimeout(() => {
-			void loadGlobalSettings();
-		}, 0);
-		return () => window.clearTimeout(timeoutId);
-	}, [loadGlobalSettings]);
-
-	const updateTelemetryOptOut = async (nextValue: boolean) => {
-		const previousValue = telemetryOptOut;
-		setTelemetryOptOut(nextValue);
-		setTelemetrySaving(true);
-		setTelemetryError(null);
-		try {
-			const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-				"set_telemetry_opt_out",
-				{ telemetry_opt_out: nextValue },
-			);
-			setTelemetryOptOut(settings.telemetryOptOut);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setTelemetryOptOut(previousValue);
-			setTelemetryError(message);
-		} finally {
-			setTelemetrySaving(false);
-		}
-	};
-
-	const updateAutoUpdateEnabled = async (nextValue: boolean) => {
-		const previousValue = autoUpdateEnabled;
-		setAutoUpdateEnabled(nextValue);
-		setAutoUpdateSaving(true);
-		setAutoUpdateError(null);
-		try {
-			const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-				"set_auto_update_enabled",
-				{ auto_update_enabled: nextValue },
-			);
-			setAutoUpdateEnabled(settings.autoUpdateEnabled);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setAutoUpdateEnabled(previousValue);
-			setAutoUpdateError(message);
-		} finally {
-			setAutoUpdateSaving(false);
-		}
-	};
-
-	const updateCloudSessionsEnabled = async (nextValue: boolean) => {
-		const previousValue = cloudSessionsEnabled;
-		setCloudSessionsEnabled(nextValue);
-		setCloudSessionsSaving(true);
-		setCloudSessionsError(null);
-		try {
-			const settings = await desktopClient.invoke<{
-				cloudSessionsEnabled: boolean;
-			}>("set_cloud_sessions_enabled", { cloud_sessions_enabled: nextValue });
-			setCloudSessionsEnabled(Boolean(settings.cloudSessionsEnabled));
-			await refreshCloudSessionsEffective();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setCloudSessionsEnabled(previousValue);
-			setCloudSessionsError(message);
-		} finally {
-			setCloudSessionsSaving(false);
-		}
-	};
-
-	const updateWebSearchEnabled = async (nextValue: boolean) => {
-		const previousValue = webSearchEnabled;
-		setWebSearchEnabled(nextValue);
-		setWebSearchSaving(true);
-		setWebSearchError(null);
-		try {
-			const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-				"set_web_search_enabled",
-				{ web_search_enabled: nextValue },
-			);
-			setWebSearchEnabled(settings.tools?.web_search?.enabled === true);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setWebSearchEnabled(previousValue);
-			setWebSearchError(message);
-		} finally {
-			setWebSearchSaving(false);
-		}
-	};
 
 	const updateTheme = (darkModeEnabled: boolean) => {
 		const nextTheme = darkModeEnabled ? "dark" : "light";
@@ -942,7 +714,7 @@ function GeneralSettingsContent({
 	return (
 		<PageFrame>
 			<PageHeader
-				description="Manage desktop preferences for this browser and CLI environment."
+				description="Manage Pi Desktop appearance and notifications."
 				title="Settings"
 			/>
 			<section className="max-w-344">
@@ -1085,138 +857,10 @@ function GeneralSettingsContent({
 				</div>
 				<div className="flex py-4 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
 					<div className="flex flex-col gap-1">
-						<p className="text-base font-semibold text-foreground">
-							Web search
-						</p>
-						<p className="text-sm text-muted-foreground">
-							Let the model search the web during a task. Only providers with
-							built-in web search honor this setting; other providers ignore it.
-							Applies to new sessions.
-						</p>
-						{webSearchReadyProviders ===
-						null ? null : webSearchReadyProviders.length > 0 ? (
-							<p className="text-xs text-muted-foreground">
-								Ready to use with {webSearchReadyProviders.join(", ")} on models
-								that support it — no extra setup needed.
-							</p>
-						) : (
-							<p className="text-xs text-amber-700 dark:text-amber-300">
-								None of your connected providers include built-in web search, so
-								this setting has no effect yet.{" "}
-								<button
-									className="underline underline-offset-2 hover:text-foreground"
-									onClick={onOpenModelProviders}
-									type="button"
-								>
-									Connect a provider
-								</button>{" "}
-								that supports it, such as Anthropic, OpenAI, or Google Gemini.
-							</p>
-						)}
-						{webSearchError ? (
-							<p className="mt-2 text-xs text-destructive" role="alert">
-								Failed to update web search setting: {webSearchError}
-							</p>
-						) : null}
-					</div>
-					<Switch
-						aria-label="Web search"
-						checked={webSearchEnabled}
-						disabled={webSearchLoading || webSearchSaving}
-						onCheckedChange={(checked) => void updateWebSearchEnabled(checked)}
-					/>
-				</div>
-				<div className="flex py-4 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-					<div className="flex flex-col gap-1">
-						<p className="text-base font-semibold text-foreground">
-							Keep CLI up to date
-						</p>
-						<p className="text-sm text-muted-foreground">
-							Automatically update the cline terminal command, which shares your
-							sessions and settings with this app. The app itself updates
-							separately.
-						</p>
-						{autoUpdateError ? (
-							<p className="mt-2 text-xs text-destructive" role="alert">
-								Failed to update CLI auto-update setting: {autoUpdateError}
-							</p>
-						) : null}
-					</div>
-					<Switch
-						aria-label="Keep CLI up to date"
-						checked={autoUpdateEnabled}
-						disabled={autoUpdateLoading || autoUpdateSaving}
-						onCheckedChange={(checked) => void updateAutoUpdateEnabled(checked)}
-					/>
-				</div>
-				{cloudSessionsAvailable ? (
-					<div className="flex py-4 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-						<div className="flex flex-col gap-1">
-							<p className="flex items-center gap-2 text-base font-semibold text-foreground">
-								Cloud sessions
-								<span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-primary">
-									Preview
-								</span>
-							</p>
-							<p className="text-sm text-muted-foreground">
-								Run Cline on your GitHub repositories in secure cloud sandboxes.
-								Adds a Cloud option to the new-session composer. Requires a
-								Cline account with GitHub connected.
-							</p>
-							{cloudSessionsError ? (
-								<p className="mt-2 text-xs text-destructive" role="alert">
-									Failed to update cloud sessions setting: {cloudSessionsError}
-								</p>
-							) : null}
-							{cloudSessionsEffective !== null &&
-							!cloudSessionsLoading &&
-							cloudSessionsEffective !== cloudSessionsEnabled ? (
-								<p className="mt-2 text-xs text-muted-foreground">
-									Cloud sessions are currently{" "}
-									{cloudSessionsEffective ? "enabled" : "disabled"} by the
-									CLINE_CODE_CLOUD_AGENTS environment override, which takes
-									precedence over this setting.
-								</p>
-							) : null}
-						</div>
-						<Switch
-							aria-label="Cloud sessions"
-							checked={cloudSessionsEnabled}
-							disabled={cloudSessionsLoading || cloudSessionsSaving}
-							onCheckedChange={(checked) =>
-								void updateCloudSessionsEnabled(checked)
-							}
-						/>
-					</div>
-				) : null}
-				<div className="flex py-4 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-					<div className="flex flex-col gap-1">
-						<p className="text-base font-semibold text-foreground">Telemetry</p>
-						<p className="text-sm text-muted-foreground">
-							Enable error and usage reports to help improve Cline.
-						</p>
-						{telemetryError ? (
-							<p className="mt-2 text-xs text-destructive" role="alert">
-								Failed to update telemetry setting: {telemetryError}
-							</p>
-						) : null}
-					</div>
-					<Switch
-						aria-label="Telemetry"
-						checked={!telemetryOptOut}
-						disabled={telemetryLoading || telemetrySaving}
-						onCheckedChange={(checked) => void updateTelemetryOptOut(!checked)}
-					/>
-				</div>
-				<div className="flex py-4 items-center justify-between gap-5 max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-					<div className="flex flex-col gap-1">
 						<p className="text-base font-semibold text-foreground">About</p>
 						<p className="text-sm text-muted-foreground">
 							{productNameForVersion(appVersion)}
 							{appVersion ? ` v${appVersion}` : ""}
-							{isBetaVersion(appVersion)
-								? " — beta builds install side by side with the stable app and update from the beta channel."
-								: ""}
 						</p>
 					</div>
 					{isBetaVersion(appVersion) ? (

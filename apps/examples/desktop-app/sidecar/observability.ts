@@ -34,6 +34,9 @@ export function createDesktopObservability(): DesktopObservability {
 		...createClineTelemetryServiceConfig({
 			metadata: DESKTOP_TELEMETRY_METADATA,
 		}),
+		// Pi Desktop must never send inherited Cline telemetry, even when
+		// a packaged binary or environment supplies collector credentials.
+		enabled: false,
 		logger,
 	});
 	const telemetry = telemetryHandle.telemetry;

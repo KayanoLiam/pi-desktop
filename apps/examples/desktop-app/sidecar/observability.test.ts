@@ -72,7 +72,7 @@ describe("desktop observability", () => {
 			}),
 		});
 		expect(mocks.createConfiguredTelemetryHandle).toHaveBeenCalledWith(
-			expect.objectContaining({ logger }),
+			expect.objectContaining({ logger, enabled: false }),
 		);
 		expect(mocks.identifyAccount).toHaveBeenCalledWith(telemetry, {
 			id: "account-1",

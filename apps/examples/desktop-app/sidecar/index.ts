@@ -233,17 +233,15 @@ async function main() {
 }
 
 /**
- * Prints whether the telemetry configuration that was inlined at build time
- * (see scripts/telemetry-define-args.ts) actually made it into this binary,
- * then exits. CI runs this against the packaged sidecar and fails the
- * publish when a release-grade build reports `"enabled":false` or an
- * unusable OTLP endpoint, so a regression in the build-time inlining can
- * never ship silently again.
+ * Reports the effective Pi Desktop telemetry policy, then exits.
+ * Collector configuration may be inherited at build time, but telemetry
+ * remains disabled regardless of those credentials.
  */
 function runTelemetrySelfcheck(): void {
-	const report = buildTelemetrySelfcheckReport(
-		createClineTelemetryServiceConfig(),
-	);
+	const report = buildTelemetrySelfcheckReport({
+		...createClineTelemetryServiceConfig(),
+		enabled: false,
+	});
 	process.stdout.write(`${JSON.stringify(report)}\n`);
 }
 

@@ -16,10 +16,6 @@ import {
 	NoOpFeatureFlagsProvider,
 	resolveCoreDistinctId,
 } from "@cline/core";
-import {
-	buildClinePostHogClient,
-	PostHogFeatureFlagsProvider,
-} from "@cline/core/services/feature-flags/posthog";
 import { resolveClineDataDir } from "@cline/shared/storage";
 
 const DESKTOP_FEATURE_FLAGS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -132,18 +128,8 @@ export function getDesktopFeatureFlagsService(options?: {
 	telemetry?: ITelemetryService;
 }): FeatureFlagsService {
 	if (!desktopFeatureFlagsService) {
-		const apiKey = process.env.TELEMETRY_SERVICE_API_KEY;
-		const provider =
-			apiKey &&
-			process.env.IS_TEST !== "true" &&
-			process.env.E2E_TEST !== "true"
-				? new PostHogFeatureFlagsProvider({
-						client: buildClinePostHogClient(apiKey),
-						config: {
-							logger: options?.logger,
-						},
-					})
-				: new NoOpFeatureFlagsProvider();
+		// Do not contact Cline's PostHog service from Pi Desktop.
+		const provider = new NoOpFeatureFlagsProvider();
 
 		desktopFeatureFlagsService = new FeatureFlagsService({
 			provider,

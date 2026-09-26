@@ -104,12 +104,12 @@ afterEach(() => {
 });
 
 describe("getDesktopFeatureFlagsService", () => {
-	it("uses PostHog when the build-time key is inlined", () => {
+	it("does not contact PostHog even when the build-time key is inlined", () => {
 		process.env.TELEMETRY_SERVICE_API_KEY = "phc_key";
 		getDesktopFeatureFlagsService();
-		expect(mocks.PostHogFeatureFlagsProvider).toHaveBeenCalledTimes(1);
-		expect(mocks.buildClinePostHogClient).toHaveBeenCalledWith("phc_key");
-		expect(mocks.NoOpFeatureFlagsProvider).not.toHaveBeenCalled();
+		expect(mocks.NoOpFeatureFlagsProvider).toHaveBeenCalledTimes(1);
+		expect(mocks.buildClinePostHogClient).not.toHaveBeenCalled();
+		expect(mocks.PostHogFeatureFlagsProvider).not.toHaveBeenCalled();
 	});
 
 	it("falls back to the no-op provider when no key was inlined", () => {
@@ -132,7 +132,7 @@ describe("getDesktopFeatureFlagsService", () => {
 		expect(getDesktopFeatureFlagsService()).toBe(
 			getDesktopFeatureFlagsService(),
 		);
-		expect(mocks.PostHogFeatureFlagsProvider).toHaveBeenCalledTimes(1);
+		expect(mocks.NoOpFeatureFlagsProvider).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -323,7 +323,7 @@ describe("disposeDesktopFeatureFlagsService", () => {
 
 		// A later call builds a fresh service rather than reusing a disposed one.
 		getDesktopFeatureFlagsService();
-		expect(mocks.PostHogFeatureFlagsProvider).toHaveBeenCalledTimes(2);
+		expect(mocks.NoOpFeatureFlagsProvider).toHaveBeenCalledTimes(2);
 	});
 
 	it("is a no-op when nothing was created", async () => {
