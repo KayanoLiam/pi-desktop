@@ -63,7 +63,6 @@ import { PageFrame, PageHeader } from "../page-layout";
 import { AddProviderContent, type AddProviderPayload } from "./add-provider";
 import { ChannelsContent } from "./channels-view";
 import { CustomizeView } from "./customize-view";
-import { ImportContent } from "./import-view";
 import { NotificationSettings } from "./notification-settings";
 import {
 	ProviderDetailContent,
@@ -616,8 +615,6 @@ export function SettingsView({
 			<ChannelsContent />
 		) : activeNav === "Schedules" ? (
 			<RoutineSchedulesContent onOpenSession={onOpenSession} />
-		) : activeNav === "Import" ? (
-			<ImportContent />
 		) : activeNav === "General" ? (
 			<GeneralSettingsContent
 				onOpenModelProviders={() => onNavigateSection("API Providers")}

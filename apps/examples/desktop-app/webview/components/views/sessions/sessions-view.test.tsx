@@ -8,6 +8,7 @@ import {
 	paginationItems,
 	SessionsView,
 } from "@/components/views/sessions/sessions-view";
+import { SETTINGS_SECTIONS } from "@/components/views/settings/sections";
 import type { SessionThread } from "@/hooks/use-session-history";
 import type { SessionHistoryItem } from "@/lib/session-history";
 import { TASK_WORKTREE_DELETE_WARNING } from "@/lib/work-in-selection";
@@ -122,6 +123,18 @@ describe("formatCompactTokens", () => {
 });
 
 describe("SessionsView table", () => {
+	it("does not expose cross-tool import in settings or session history", async () => {
+		const view = renderView();
+		await view.render();
+		expect(SETTINGS_SECTIONS).not.toContain("Import");
+		expect(
+			container.querySelector(
+				'[aria-label="Import sessions from other tools"]',
+			),
+		).toBeNull();
+		expect(container.textContent).not.toContain("Import");
+	});
+
 	it("labels the title and time columns", async () => {
 		const view = renderView();
 		await view.render();

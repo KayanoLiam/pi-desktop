@@ -187,6 +187,15 @@ afterEach(async () => {
 });
 
 describe("Pi thread command routing", () => {
+	it.each([
+		"list_importable_sessions",
+		"import_sessions",
+	])("rejects the removed Cline import command %s", async (command) => {
+		await expect(handleCommand(ctx, command)).rejects.toThrow(
+			`unsupported desktop command: ${command}`,
+		);
+	});
+
 	it("lists and changes Pi extensions in the current local workspace, not Cline plugins", async () => {
 		const projectExtensions = join(dir, ".pi", "extensions");
 		mkdirSync(projectExtensions, { recursive: true });

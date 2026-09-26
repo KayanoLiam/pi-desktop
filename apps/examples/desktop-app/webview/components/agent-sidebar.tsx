@@ -10,7 +10,6 @@ import {
 	Filter,
 	FolderTree,
 	GitFork,
-	Import,
 	Loader2,
 	Mic,
 	PanelLeftOpen,
@@ -146,7 +145,6 @@ const SETTINGS_SECTION_ICONS = {
 	Voice: Mic,
 	Channels: Radio,
 	Schedules: Clock3,
-	Import: Import,
 	Customize: Blocks,
 } satisfies Record<SettingsSection, typeof Settings>;
 
