@@ -3,42 +3,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RemoteEnvironmentProfile } from "@/lib/remote-environments";
-import {
-	buildEnvironmentSelectorModel,
-	EnvironmentSelector,
-} from "./environment-selector";
-
-const profiles: RemoteEnvironmentProfile[] = [
-	{
-		id: "pi-server",
-		name: "Raspberry Pi",
-		host: "pi.example.com",
-		user: "pi",
-	},
-	{
-		id: "build-box",
-		name: "Build box",
-		host: "builder.example.com",
-		user: "ubuntu",
-		port: 2200,
-	},
-];
+import { SETTINGS_SECTIONS } from "../settings/sections";
+import { EnvironmentSelector } from "./environment-selector";
 
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-	if (!("ResizeObserver" in globalThis)) {
-		Object.assign(globalThis, {
-			ResizeObserver: class {
-				observe() {}
-				unobserve() {}
-				disconnect() {}
-			},
-		});
-	}
 	Element.prototype.scrollIntoView ??= () => {};
 	Element.prototype.hasPointerCapture ??= () => false;
 	Element.prototype.setPointerCapture ??= () => {};
@@ -51,218 +23,90 @@ beforeEach(() => {
 afterEach(async () => {
 	await act(async () => root.unmount());
 	container.remove();
-	vi.restoreAllMocks();
 });
 
-async function click(element: Element): Promise<void> {
+async function openMenu() {
+	const trigger = container.querySelector("#environment-selector-btn");
+	if (!trigger) throw new Error("Missing environment selector");
 	await act(async () => {
-		element.dispatchEvent(
-			new MouseEvent("click", { bubbles: true, cancelable: true }),
-		);
-		await Promise.resolve();
-	});
-}
-
-async function pointerDown(element: Element): Promise<void> {
-	await act(async () => {
-		element.dispatchEvent(
+		trigger.dispatchEvent(
 			new MouseEvent("pointerdown", {
 				bubbles: true,
 				cancelable: true,
 				button: 0,
 			}),
 		);
-		await Promise.resolve();
 	});
 }
 
-function trigger(): HTMLButtonElement {
-	const element = container.querySelector<HTMLButtonElement>(
-		"#environment-selector-btn",
+async function select(label: string) {
+	const item = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+		(item) => item.textContent?.includes(label),
 	);
-	expect(element).not.toBeNull();
-	return element as HTMLButtonElement;
+	if (!item) throw new Error(`Missing menu item: ${label}`);
+	await act(async () => {
+		item.dispatchEvent(
+			new MouseEvent("click", { bubbles: true, cancelable: true }),
+		);
+	});
 }
 
-function menuItemContaining(text: string): HTMLElement {
-	const item = Array.from(
-		document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-	).find((candidate) => candidate.textContent?.includes(text));
-	expect(item).toBeDefined();
-	return item as HTMLElement;
-}
-
-describe("buildEnvironmentSelectorModel", () => {
-	it("builds a sorted remote catalog and identifies the connected profile", () => {
-		const model = buildEnvironmentSelectorModel("pi-server", [
-			...profiles,
-			{ ...profiles[0], name: "Duplicate Pi" },
-			{ ...profiles[0], id: undefined, name: "Unsaved" },
-		]);
-
-		expect(model).toMatchObject({
-			activeKind: "remote",
-			activeLabel: "Raspberry Pi",
-			local: { id: "local", selected: false },
-		});
-		expect(model.remotes).toEqual([
-			expect.objectContaining({
-				id: "build-box",
-				label: "Build box",
-				selected: false,
-			}),
-			expect.objectContaining({
-				id: "pi-server",
-				label: "Raspberry Pi",
-				selected: true,
-			}),
-		]);
-	});
-
-	it("does not mislabel an unloaded remote environment as Local", () => {
-		expect(buildEnvironmentSelectorModel("remote-loading", [])).toMatchObject({
-			activeKind: "remote",
-			activeLabel: "Remote",
-			local: { selected: false },
-		});
-	});
-});
-
-describe("EnvironmentSelector", () => {
-	it("renders every environment tier and routes selections and host setup", async () => {
-		const onSelectEnvironment = vi.fn(async () => undefined);
-		const onAddSshHost = vi.fn();
-		await act(async () => {
+describe("Pi environment menu", () => {
+	it("removes Remote settings and SSH choices even when saved hosts exist", async () => {
+		expect(SETTINGS_SECTIONS).not.toContain("Remote");
+		await act(async () =>
 			root.render(
 				<EnvironmentSelector
-					activeEnvironmentId="pi-server"
-					onAddSshHost={onAddSshHost}
-					onSelectEnvironment={onSelectEnvironment}
-					profiles={profiles}
+					activeEnvironmentId="local"
+					profiles={[{ id: "host", name: "Saved host", host: "example.com" }]}
+					onSelectEnvironment={vi.fn()}
 				/>,
-			);
-		});
-
-		expect(trigger().textContent?.trim()).toBe("");
-		expect(trigger().getAttribute("aria-label")).toBe(
-			"Environment: Raspberry Pi",
+			),
 		);
-		expect(trigger().title).toBe("Environment: Raspberry Pi");
-		expect(document.body.textContent).not.toContain("Raspberry Pi");
-		await pointerDown(trigger());
-		expect(document.body.textContent).toContain("Raspberry Pi");
+		await openMenu();
 		expect(document.body.textContent).toContain("Local");
-		expect(document.body.textContent).toContain("Remote");
-		expect(document.body.textContent).toContain("Build box");
-		expect(document.body.textContent).not.toContain(
-			"ubuntu@builder.example.com:2200",
-		);
-		expect(document.body.textContent).not.toContain("Connected");
 		expect(document.body.textContent).toContain("Cloud");
-		expect(document.body.textContent).toContain("Coming soon");
-		expect(menuItemContaining("Cloud").getAttribute("aria-disabled")).toBe(
-			"true",
-		);
-
-		await click(menuItemContaining("Local"));
-		await vi.waitFor(() => {
-			expect(onSelectEnvironment).toHaveBeenCalledWith("local");
-		});
-
-		await pointerDown(trigger());
-		const addHost = document.querySelector(
-			'[role="menuitem"][aria-label="Add SSH Host"]',
-		);
-		expect(addHost).not.toBeNull();
-		expect(addHost?.textContent?.trim()).toBe("");
-		expect(addHost?.parentElement?.textContent).toContain("Remote");
-		expect(document.body.textContent?.indexOf("Cloud")).toBeLessThan(
-			document.body.textContent?.indexOf("Remote") ?? 0,
-		);
-		await click(addHost as HTMLElement);
-		expect(onAddSshHost).toHaveBeenCalledTimes(1);
+		expect(document.body.textContent).not.toContain("Remote");
+		expect(document.body.textContent).not.toContain("Saved host");
+		expect(document.querySelector('[aria-label="Add SSH Host"]')).toBeNull();
 	});
 
-	it("selects Cloud from the environment menu when enabled", async () => {
+	it("preserves Cloud selection", async () => {
 		const onSelectExecutionTarget = vi.fn();
-		const onSelectEnvironment = vi.fn();
 		await act(async () =>
 			root.render(
 				<EnvironmentSelector
 					activeEnvironmentId="local"
+					profiles={[]}
 					cloudEnabled
+					onSelectEnvironment={vi.fn()}
 					onSelectExecutionTarget={onSelectExecutionTarget}
-					onSelectEnvironment={onSelectEnvironment}
-					onAddSshHost={vi.fn()}
-					profiles={profiles}
 				/>,
 			),
 		);
-		await pointerDown(trigger());
-		expect(document.body.textContent).not.toContain("Coming soon");
-		await click(menuItemContaining("Cloud"));
+		await openMenu();
+		await select("Cloud");
 		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith("cloud");
-		expect(onSelectEnvironment).not.toHaveBeenCalled();
 	});
 
-	it.each([
-		["Local", "local"],
-		["Build box", "build-box"],
-	])("switches from Cloud to %s without leaving Cloud selected", async (label, environmentId) => {
+	it("can switch back from Cloud to Local", async () => {
 		const onSelectExecutionTarget = vi.fn();
 		const onSelectEnvironment = vi.fn();
 		await act(async () =>
 			root.render(
 				<EnvironmentSelector
 					activeEnvironmentId="local"
-					executionTarget="cloud"
+					profiles={[]}
 					cloudEnabled
-					onSelectExecutionTarget={onSelectExecutionTarget}
+					executionTarget="cloud"
 					onSelectEnvironment={onSelectEnvironment}
-					onAddSshHost={vi.fn()}
-					profiles={profiles}
+					onSelectExecutionTarget={onSelectExecutionTarget}
 				/>,
 			),
 		);
-		expect(trigger().title).toBe("Environment: Cloud");
-		await pointerDown(trigger());
-		expect(menuItemContaining("Cloud").getAttribute("aria-current")).toBe(
-			"true",
-		);
-		expect(menuItemContaining("Local").hasAttribute("aria-current")).toBe(
-			false,
-		);
-		await click(menuItemContaining(label));
+		await openMenu();
+		await select("Local");
 		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith("local");
-		if (environmentId === "local")
-			expect(onSelectEnvironment).not.toHaveBeenCalled();
-		else
-			expect(onSelectEnvironment).toHaveBeenCalledExactlyOnceWith(
-				environmentId,
-			);
-	});
-
-	it("reopens the menu after a rejected environment switch", async () => {
-		const onSelectEnvironment = vi
-			.fn()
-			.mockRejectedValue(new Error("SSH unavailable"));
-		await act(async () => {
-			root.render(
-				<EnvironmentSelector
-					activeEnvironmentId="local"
-					onAddSshHost={vi.fn()}
-					onSelectEnvironment={onSelectEnvironment}
-					profiles={profiles}
-				/>,
-			);
-		});
-
-		await pointerDown(trigger());
-		await click(menuItemContaining("Build box"));
-		await vi.waitFor(() => {
-			expect(onSelectEnvironment).toHaveBeenCalledWith("build-box");
-			expect(menuItemContaining("Build box")).toBeDefined();
-		});
-		expect(trigger().disabled).toBe(false);
+		expect(onSelectEnvironment).not.toHaveBeenCalled();
 	});
 });

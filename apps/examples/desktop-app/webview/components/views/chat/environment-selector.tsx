@@ -1,13 +1,12 @@
 "use client";
 
-import { Check, Cloud, Laptop, Loader2, Server, Settings } from "lucide-react";
+import { Check, Cloud, Laptop, Loader2, Server } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
-	DropdownMenuLabel,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -37,7 +36,6 @@ export type EnvironmentSelectorProps = {
 	loading?: boolean;
 	switchingEnvironmentId?: string | null;
 	onSelectEnvironment: (environmentId: string) => void | Promise<void>;
-	onAddSshHost: () => void;
 };
 
 export function buildEnvironmentSelectorModel(
@@ -85,7 +83,6 @@ export function EnvironmentSelector({
 	loading = false,
 	switchingEnvironmentId,
 	onSelectEnvironment,
-	onAddSshHost,
 }: EnvironmentSelectorProps) {
 	const model = useMemo(
 		() => buildEnvironmentSelectorModel(activeEnvironmentId, profiles),
@@ -189,46 +186,6 @@ export function EnvironmentSelector({
 						<Check className="ml-auto" />
 					) : null}
 				</DropdownMenuItem>
-
-				<DropdownMenuSeparator />
-				<div className="flex items-center justify-between">
-					<DropdownMenuLabel className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-						<Server className="size-4" />
-						Remote
-					</DropdownMenuLabel>
-					<DropdownMenuItem
-						aria-label="Add SSH Host"
-						title="Add SSH Host"
-						className="mr-1 size-6 justify-center p-0"
-						disabled={busy}
-						onSelect={onAddSshHost}
-					>
-						<Settings className="size-3.5" />
-					</DropdownMenuItem>
-				</div>
-				{model.remotes.length > 0 ? (
-					model.remotes.map((option) => (
-						<DropdownMenuItem
-							aria-current={
-								!cloudSelected && option.selected ? "true" : undefined
-							}
-							className="aria-current:bg-purple-500/20 aria-current:focus:bg-purple-500/25"
-							disabled={busy}
-							key={option.id}
-							onSelect={() => void selectEnvironment(option.id)}
-						>
-							<span className="min-w-0 flex-1 truncate">{option.label}</span>
-							{optionStatus(option)}
-							{!cloudSelected && option.selected ? (
-								<Check className="ml-auto" />
-							) : null}
-						</DropdownMenuItem>
-					))
-				) : (
-					<DropdownMenuItem disabled>
-						<span className="text-muted-foreground">No SSH hosts saved</span>
-					</DropdownMenuItem>
-				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

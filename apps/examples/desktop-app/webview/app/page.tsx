@@ -106,7 +106,6 @@ import {
 } from "@/lib/provider-model-catalog";
 import type {
 	RemoteEnvironmentConnectResult,
-	RemoteEnvironmentListResult,
 	RemoteEnvironmentProfile,
 } from "@/lib/remote-environments";
 import {
@@ -290,13 +289,8 @@ export default function Home() {
 	const environmentSelectionRevision = useRef(0);
 	const [activeRemoteEnvironment, setActiveRemoteEnvironment] =
 		useState<RemoteWorkspaceEnvironment | null>(null);
-	const [remoteEnvironmentProfiles, setRemoteEnvironmentProfiles] = useState<
-		RemoteEnvironmentProfile[]
-	>([]);
-	const [
-		remoteEnvironmentProfilesLoading,
-		setRemoteEnvironmentProfilesLoading,
-	] = useState(true);
+	const remoteEnvironmentProfiles: RemoteEnvironmentProfile[] = [];
+	const remoteEnvironmentProfilesLoading = false;
 	const [remoteDirectoryPicker, setRemoteDirectoryPicker] =
 		useState<RemoteWorkspaceEnvironment | null>(null);
 	const remoteDirectoryPickerResolverRef = useRef<
@@ -369,37 +363,6 @@ export default function Home() {
 			cancelled = true;
 		};
 	}, []);
-
-	useEffect(() => {
-		if (view !== "chat") return;
-		let revision = 0;
-		const refresh = () => {
-			const requestRevision = ++revision;
-			setRemoteEnvironmentProfilesLoading(true);
-			void desktopClient
-				.invoke<RemoteEnvironmentListResult>("list_remote_environments")
-				.then((result) => {
-					if (requestRevision === revision)
-						setRemoteEnvironmentProfiles(result.profiles);
-				})
-				.catch(() => {
-					// The Settings > Remote surface owns profile-management errors.
-				})
-				.finally(() => {
-					if (requestRevision === revision)
-						setRemoteEnvironmentProfilesLoading(false);
-				});
-		};
-		const unsubscribe = desktopClient.subscribe(
-			"remote_environment_profiles_changed",
-			refresh,
-		);
-		refresh();
-		return () => {
-			++revision;
-			unsubscribe();
-		};
-	}, [view]);
 
 	useEffect(
 		() => () => {
@@ -845,7 +808,6 @@ export default function Home() {
 											environmentProfilesLoading={
 												remoteEnvironmentProfilesLoading
 											}
-											onAddSshHost={() => handleSettingsSectionChange("Remote")}
 											onPickRemoteWorkspaceDirectory={
 												pickRemoteWorkspaceDirectory
 											}
@@ -954,7 +916,6 @@ function ChatThreadPane({
 	knownWorkspacePaths,
 	onInitialPromptDraftConsumed,
 	onUpdateSessionMetadata,
-	onAddSshHost,
 	onDeleteSession,
 	onNewThread,
 	onOpenSession,
@@ -982,7 +943,6 @@ function ChatThreadPane({
 		sessionId: string,
 		metadata: SessionMetadata,
 	) => void;
-	onAddSshHost: () => void;
 	onDeleteSession?: (sessionId: string, threadId?: string) => void;
 	onNewThread?: () => void;
 	onOpenSession?: (
@@ -2568,7 +2528,6 @@ function ChatThreadPane({
 							executionTarget={isCloudSession ? "cloud" : "local"}
 							onSelectExecutionTarget={handleExecutionTargetChange}
 							loading={environmentProfilesLoading}
-							onAddSshHost={onAddSshHost}
 							onSelectEnvironment={onSelectEnvironment}
 							profiles={environmentProfiles}
 						/>

@@ -13,7 +13,6 @@ import {
 	Import,
 	Loader2,
 	Mic,
-	Network,
 	PanelLeftOpen,
 	Pencil,
 	Pin,
@@ -148,7 +147,6 @@ const SETTINGS_SECTION_ICONS = {
 	Channels: Radio,
 	Schedules: Clock3,
 	Import: Import,
-	Remote: Network,
 	Customize: Blocks,
 } satisfies Record<SettingsSection, typeof Settings>;
 

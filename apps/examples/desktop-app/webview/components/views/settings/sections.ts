@@ -12,7 +12,6 @@ const ALL_SETTINGS_SECTIONS = [
 	"Channels",
 	"Schedules",
 	"Import",
-	"Remote",
 ] as const;
 
 // The Extensions group shows the installed Pi extensions. Pi packages can be

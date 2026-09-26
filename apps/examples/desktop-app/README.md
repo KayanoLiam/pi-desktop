@@ -474,7 +474,13 @@ Nothing else is imported, deliberately; other login-environment variables
 `CLINE_SIDECAR_SKIP_SHELL_PATH=1` to disable. Implementation and details:
 [`core shell-path.ts`](../../../sdk/packages/core/src/remote/shell-path.ts).
 
-## SSH Remote Environments
+## SSH Remote Environments (legacy Cline infrastructure)
+
+> **Not a native Pi feature.** The Pi desktop no longer exposes the Remote
+> settings page or SSH host selection, and does not load saved SSH profiles.
+> The shared Cline SDK and legacy backend infrastructure remain unchanged for
+> other clients. The following describes that inherited infrastructure, not
+> an available Pi desktop workflow.
 
 Open **Settings → Remote** to add and test an SSH host. Saving or testing a
 profile does not activate it. From the welcome chat, open the environment
